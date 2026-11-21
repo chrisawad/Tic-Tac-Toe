@@ -10,7 +10,7 @@ import {
   palette, player, playerFor, restoreMatch, resultFor, scoresFor, turn,
   type Color, type Difficulty, type Match, type Mode, type Player, type PlayerIndex,
 } from './game';
-import { installSteps, setupInstall } from './install';
+import { setupInstall } from './install';
 import { applyRoomMove, isRoomCode, openRoom, readyForRematch, type RoundAction } from './online';
 import './style.css';
 
@@ -445,10 +445,6 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-home], 
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-dialog]')) {
   button.addEventListener('click', () => element<HTMLDialogElement>(button.dataset.dialog + '-dialog').showModal());
 }
-element('install-help-button').addEventListener('click', () => {
-  element('install-steps').textContent = installSteps();
-  element<HTMLDialogElement>('install-dialog').showModal();
-});
 element('room-back').addEventListener('click', () => {
   room?.close();
   room = undefined;
@@ -531,7 +527,7 @@ createIcons({
   attrs: { 'aria-hidden': 'true' },
 });
 updateSound();
-setupInstall(element('install-button'), element('install-help-button'), element('install-help-label'), element('update-button'), notify);
+setupInstall(element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'), notify);
 const url = new URL(location.href);
 const invited = url.searchParams.get('room')?.toUpperCase() ?? '';
 if (isRoomCode(invited)) {

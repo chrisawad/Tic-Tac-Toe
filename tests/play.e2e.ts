@@ -4,8 +4,15 @@ const square = (page: Page, index: number) => page.getByRole('button', { name: n
 const name = (page: Page, slot: 'one' | 'two') => page.locator('#name-' + slot);
 const mode = (page: Page, value: 'ai' | 'local' | 'online') => page.locator('[data-mode="' + value + '"]');
 
+const dismissInstall = (page: Page) => page.getByRole('button', { name: 'Not now' }).click();
+
+async function visit(page: Page, url = './') {
+  await page.goto(url);
+  await dismissInstall(page);
+}
+
 async function startLocal(page: Page) {
-  await page.goto('./');
+  await visit(page);
   await mode(page, 'local').click();
   await name(page, 'one').fill('Emu');
   await name(page, 'two').fill('Nova');
@@ -32,6 +39,7 @@ test('local win, winning line, celebration, rematch, and saved score', async ({ 
   await expect(page.locator('#score dd')).toHaveText(['1', '0', '0']);
   await square(page, 4).click();
   await page.reload();
+  await dismissInstall(page);
   await mode(page, 'local').click();
   await page.getByRole('button', { name: 'Resume match' }).click();
   await expect(square(page, 4)).toHaveAttribute('aria-label', 'Square 5, X');
@@ -54,9 +62,10 @@ test('draw uses its own dialog and can return to the board', async ({ page }) =>
 });
 
 test('T-3PO replies, sound preference persists, keyboard navigates the board', async ({ page }) => {
-  await page.goto('./');
+  await visit(page);
   await page.getByRole('button', { name: 'Sound' }).click();
   await page.reload();
+  await dismissInstall(page);
   await expect(page.getByRole('button', { name: 'Sound' })).toHaveAttribute('aria-pressed', 'false');
   await mode(page, 'ai').click();
   await page.getByRole('radio', { name: 'Hard' }).check({ force: true });
@@ -108,8 +117,13 @@ test('manifest, icons, install eligibility, and offline play under the Pages sco
   await expect(page.getByRole('button', { name: /Square \d, O/ })).toHaveCount(1);
 });
 
-test('install button calls the native prompt and hides on installation', async ({ page }) => {
+test('install popup opens on launch, calls the native prompt, and stays hidden after installation', async ({ page }) => {
   await page.addInitScript(() => {
+    // Emulate an installed browser on reload, which no longer advertises eligibility.
+    window.addEventListener('beforeinstallprompt', event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    });
     Object.defineProperty(navigator, 'install', {
       configurable: true,
       value: () => {
@@ -120,14 +134,18 @@ test('install button calls the native prompt and hides on installation', async (
     });
   });
   await page.goto('./');
-  await page.getByRole('button', { name: 'Install app' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+  await dialog.getByRole('button', { name: 'Install app' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-install', 'true');
+  await expect(dialog).toBeHidden();
+  await page.reload();
   await expect(page.getByRole('button', { name: /install/i })).toHaveCount(0);
+  await expect(dialog).toBeHidden();
 });
 
 test('Chromium install fallback honors a declined prompt', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(navigator, 'install', { value: undefined }); });
-  await page.goto('./');
+  await visit(page);
   await page.evaluate(() => {
     const event = Object.assign(new Event('beforeinstallprompt', { cancelable: true }), {
       prompt: () => {
@@ -141,26 +159,67 @@ test('Chromium install fallback honors a declined prompt', async ({ page }) => {
   await page.locator('#install-button').click();
   await expect(page.locator('html')).toHaveAttribute('data-install', 'true');
   await expect(page.locator('#install-button')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Install help' })).toBeVisible();
+  await page.locator('#install-help-button').click();
+  await expect(page.locator('#install-steps')).toBeVisible();
+});
+
+test('manual install instructions stay accessible from the toolbar and return on the next visit', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'install', { value: undefined });
+    Object.defineProperty(navigator, 'userAgent', { value: 'iPhone' });
+    window.addEventListener('beforeinstallprompt', event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    });
+  });
+  await page.goto('./');
+  const dialog = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+  await expect(dialog).toContainText('Add to Home Screen');
+  await page.keyboard.press('Escape');
+  await mode(page, 'online').click();
+  await page.getByRole('button', { name: 'Install app' }).click();
+  await expect(dialog).toBeVisible();
+  await dismissInstall(page);
+  await expect(page.locator('#setup-title')).toBeVisible();
+  await page.reload();
+  await expect(dialog).toBeVisible();
+});
+
+test('an existing related app skips the install popup in a browser tab', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.addEventListener('beforeinstallprompt', event => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    });
+    Object.defineProperty(navigator, 'getInstalledRelatedApps', {
+      value: async () => [{ platform: 'webapp', url: new URL('manifest.webmanifest', location.href).href }],
+    });
+  });
+  await page.goto('./');
+  await expect(page.locator('#install-help-button')).toBeHidden();
+  await expect(page.locator('#install-button')).toBeHidden();
+  await expect(page.locator('#install-dialog')).toBeHidden();
+  await mode(page, 'local').click();
 });
 
 test('standalone display hides the install affordance', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
   await page.goto('./');
+  await expect(page.locator('#install-dialog')).toBeHidden();
   await expect(page.getByRole('button', { name: /install/i })).toHaveCount(0);
   await expect(mode(page, 'local')).toBeVisible();
 });
 
 test('start screen and playfield fit the narrowest phone layout', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 640 });
-  await page.goto('./');
+  await visit(page);
   const width = () => page.evaluate(() => document.documentElement.scrollWidth);
   expect(await width()).toBe(320);
   await mode(page, 'local').click();
   expect(await width()).toBe(320);
   await page.getByRole('button', { name: 'Start battle' }).click();
   expect(await width()).toBe(320);
-  for (const [w, h] of [[320, 480], [568, 320], [390, 844], [768, 1024], [1440, 900], [1920, 1080]]) {
+  for (const [w, h] of [[320, 480], [568, 320], [667, 375], [844, 390], [390, 844], [768, 1024], [1024, 768], [1440, 900], [1920, 1080]]) {
     await page.setViewportSize({ width: w, height: h });
     const layout = await page.locator('#board').evaluate(board => {
       const rect = board.getBoundingClientRect();
@@ -172,14 +231,50 @@ test('start screen and playfield fit the narrowest phone layout', async ({ page 
     expect(layout.size).toBeCloseTo(layout.available, 0);
     expect(layout.size).toBeGreaterThan(150);
     if (w === 320) expect(layout.size).toBeGreaterThan(260);
+    if (w === 1024) expect(layout.size).toBeGreaterThan(555);
+    if (w > h && h <= 390) expect(layout.size).toBeGreaterThan(h * .88);
     if (w === 1920) expect(layout.size).toBe(600);
     expect(layout.documentWidth).toBe(w);
     expect(layout.documentHeight, `viewport ${w} × ${h}`).toBeLessThanOrEqual(h + 1);
   }
 });
 
-test('online setup keeps host and join actions distinct and routes invites to Join', async ({ page }) => {
+test('short landscape screens fit the menu, board and rematch through rotation', async ({ page }) => {
+  await page.setViewportSize({ width: 568, height: 320 });
   await page.goto('./');
+  await expect(page.getByRole('button', { name: 'Not now' })).toBeInViewport({ ratio: 1 });
+  await dismissInstall(page);
+  for (const value of ['ai', 'local', 'online'] as const) {
+    await expect(mode(page, value)).toBeInViewport({ ratio: 1 });
+  }
+  await mode(page, 'online').click();
+  await page.getByText('Join a friend', { exact: true }).click();
+  const room = await page.locator('#join-code').boundingBox();
+  const profile = await page.locator('#profile-one').boundingBox();
+  expect(room!.x + room!.width).toBeLessThan(profile!.x);
+  await expect(page.getByRole('button', { name: 'Join room' })).toBeInViewport({ ratio: 1 });
+  await page.getByRole('button', { name: 'All modes' }).click();
+  await mode(page, 'local').click();
+  await expect(page.getByRole('button', { name: 'Start battle' })).toBeInViewport({ ratio: 1 });
+  await page.getByRole('button', { name: 'Start battle' }).click();
+  const board = await page.locator('#board').boundingBox();
+  const nav = await page.locator('.topbar').boundingBox();
+  expect(board!.x).toBeGreaterThan(nav!.x + nav!.width);
+  await expect(page.locator('#board')).toBeInViewport({ ratio: 1 });
+  await square(page, 0).click();
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect(square(page, 0)).toHaveAttribute('aria-label', 'Square 1, X');
+  await square(page, 3).click();
+  await page.setViewportSize({ width: 568, height: 320 });
+  for (const cell of [1, 4, 2]) await square(page, cell).click();
+  const rematch = page.getByRole('button', { name: 'Rematch' });
+  await expect(rematch).toBeInViewport({ ratio: 1 });
+  await rematch.click();
+  await expect(page.locator('#round-counter')).toHaveText('Round 2');
+});
+
+test('online setup keeps host and join actions distinct and routes invites to Join', async ({ page }) => {
+  await visit(page);
   await mode(page, 'online').click();
   await expect(page.getByRole('button', { name: 'Create a room' })).toBeVisible();
   await expect(page.getByLabel('Room code', { exact: true })).toBeHidden();
@@ -189,7 +284,7 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
   await expect(page.locator('#join-error')).toContainText('five-character');
   await page.getByText('Host a game', { exact: true }).click();
   await expect(page.locator('#join-error')).toBeEmpty();
-  await page.goto('./?room=ABC23');
+  await visit(page, './?room=ABC23');
   await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
 });
@@ -197,7 +292,7 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }, testInfo) => {
   test.skip(!process.env.LIVE_ROOM_TEST || testInfo.project.name !== 'desktop', 'Live PeerJS room smoke test');
   test.setTimeout(85_000);
-  await page.goto('./');
+  await visit(page);
   await mode(page, 'online').click();
   await name(page, 'one').fill('Host');
   await page.getByRole('button', { name: 'Create a room' }).click();
@@ -208,7 +303,7 @@ test('real online room carries a game and rematch between two browser contexts',
   expect(invite).toBe(new URL('?room=' + await code.textContent(), baseURL).href);
   const guest = await browser.newPage();
   try {
-    await guest.goto(invite);
+    await visit(guest, invite);
     await expect(guest.locator('#join-code')).toHaveValue((await code.textContent())!);
     await name(guest, 'one').fill('Guest');
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });

@@ -13,22 +13,45 @@ type InstallNavigator = Navigator & {
 export function setupInstall(
   install: HTMLButtonElement,
   help: HTMLButtonElement,
-  helpLabel: HTMLElement,
+  dialog: HTMLDialogElement,
   update: HTMLButtonElement,
   notify: (message: string) => void,
 ) {
   const nav = navigator as InstallNavigator;
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
+  const confirm = dialog.querySelector<HTMLButtonElement>('#install-confirm')!;
+  const steps = dialog.querySelector<HTMLElement>('#install-steps')!;
+  const storageKey = 'ttt:installed';
   let pending: NativeInstall | undefined;
   let installed = false;
+  let checked = false;
+  let offered = false;
   let related = false;
   let busy = false;
-  const canInstall = () => isSecureContext && (typeof nav.install === 'function' || Boolean(pending));
+  let nativeFailed = false;
+  const nativeAvailable = () => typeof nav.install === 'function' && !nativeFailed;
+  const canInstall = () => isSecureContext && (nativeAvailable() || Boolean(pending));
+  try { installed = localStorage.getItem(storageKey) === 'yes'; } catch { /* Private storage may be unavailable. */ }
+  function remember(value: boolean) {
+    installed = value;
+    try {
+      if (value) localStorage.setItem(storageKey, 'yes');
+      else localStorage.removeItem(storageKey);
+    } catch { /* In-memory detection still works. */ }
+  }
+  function offer() {
+    offered = true;
+    if (!dialog.open) dialog.showModal();
+  }
 
   function reflect() {
     const standalone = installed || related || display.matches || nav.standalone === true;
     install.hidden = standalone || !canInstall();
     help.hidden = standalone || canInstall();
+    confirm.hidden = !canInstall();
+    steps.hidden = canInstall();
+    if (standalone && dialog.open) dialog.close();
+    else if (checked && !standalone && !offered) offer();
   }
   async function checkRelated() {
     if (!isSecureContext || !nav.getInstalledRelatedApps) return;
@@ -41,37 +64,54 @@ export function setupInstall(
   }
   window.addEventListener('beforeinstallprompt', event => {
     event.preventDefault();
+    if (display.matches || nav.standalone) return;
     pending = event as NativeInstall;
-    installed = related = false;
+    remember(false);
+    related = false;
     reflect();
   });
   window.addEventListener('appinstalled', () => {
-    installed = true;
+    remember(true);
     pending = undefined;
     reflect();
   });
   window.addEventListener('focus', () => { reflect(); void checkRelated(); });
-  display.addEventListener('change', reflect);
-  install.addEventListener('click', async () => {
+  window.addEventListener('storage', event => {
+    if (event.key !== storageKey) return;
+    installed = event.newValue === 'yes';
+    reflect();
+  });
+  function displayChanged() {
+    if (display.matches || nav.standalone) remember(true);
+    reflect();
+  }
+  display.addEventListener('change', displayChanged);
+  async function requestInstall() {
     if (busy || !canInstall()) return;
+    offered = true;
     busy = true;
+    if (dialog.open) dialog.close();
     install.setAttribute('aria-disabled', 'true');
     try {
-      if (typeof nav.install === 'function') {
-        await nav.install();
-        installed = true;
+      if (nativeAvailable()) {
+        await nav.install!();
+        remember(true);
       } else if (pending) {
         const event = pending;
         pending = undefined;
         await event.prompt();
-        installed ||= (await event.userChoice).outcome === 'accepted';
+        if ((await event.userChoice).outcome === 'accepted') remember(true);
         if (!installed) {
-          helpLabel.textContent = 'Install help';
           notify('Installation canceled. You can install later.');
         }
       }
-    } catch {
-      notify('Installation didn’t finish. You can also use your browser’s install menu.');
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        notify('Installation canceled. You can install later.');
+      } else {
+        nativeFailed = true;
+        notify('Installation didn’t finish. You can also use your browser’s install menu.');
+      }
     } finally {
       busy = false;
       install.removeAttribute('aria-disabled');
@@ -79,14 +119,18 @@ export function setupInstall(
       reflect();
       if (wasFocused && install.hidden && !help.hidden) help.focus();
     }
-  });
-  reflect();
-  void checkRelated();
+  }
+  steps.textContent = installSteps();
+  install.addEventListener('click', requestInstall);
+  confirm.addEventListener('click', requestInstall);
+  help.addEventListener('click', offer);
+  displayChanged();
+  void checkRelated().then(() => { checked = true; reflect(); });
   const updateSW = registerSW({ onNeedRefresh() { update.hidden = false; } });
   update.addEventListener('click', () => void updateSW(true));
 }
 
-export function installSteps() {
+function installSteps() {
   if (!isSecureContext) return 'Open the HTTPS version of the game to install it.';
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   return ios

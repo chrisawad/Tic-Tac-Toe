@@ -22,7 +22,7 @@
             <span id="sound-off" hidden><i data-lucide="volume-x"></i></span>
           </button>
           <button id="install-button" class="button install-button" type="button" hidden><i data-lucide="download"></i> Install app</button>
-          <button id="install-help-button" class="button install-button" type="button"><i data-lucide="download"></i> <span id="install-help-label">Install app</span></button>
+          <button id="install-help-button" class="button install-button" type="button"><i data-lucide="download"></i> Install app</button>
           <button id="update-button" class="button install-button" type="button" hidden><i data-lucide="refresh-cw"></i> Update app</button>
         </div>
       </div>
@@ -166,12 +166,17 @@
       <form method="dialog"><button class="button primary" autofocus>Got it</button></form>
     </dialog>
 
-    <dialog id="install-dialog" aria-labelledby="install-title">
-      <span class="dialog-icon" aria-hidden="true"><i data-lucide="download"></i></span>
-      <h2 id="install-title">Install Tic Tac Toe</h2>
-      <p>Open the game from your home screen and play AI Battle or Local PvP offline after the first visit.</p>
+    <dialog id="install-dialog" aria-labelledby="install-title" aria-describedby="install-benefit">
+      <div class="install-heading">
+        <img src="./icons/icon-192.png" width="52" height="52" alt="">
+        <h2 id="install-title">Install Tic Tac Toe</h2>
+      </div>
+      <p id="install-benefit">Launch from your home screen and play AI Battle or Local PvP offline.</p>
       <p id="install-steps"></p>
-      <form method="dialog"><button class="button primary" autofocus>Got it</button></form>
+      <form method="dialog" class="dialog-actions">
+        <button class="button" autofocus>Not now</button>
+        <button id="install-confirm" class="button primary" type="button" hidden><i data-lucide="download"></i> Install app</button>
+      </form>
     </dialog>
 
     <dialog id="leave-dialog" aria-labelledby="leave-title">
