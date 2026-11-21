@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#131323">
+    <meta name="description" content="Play Tic Tac Toe against T-3PO, pass the screen, or invite a friend to an online room.">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="./icons/icon-192.png">
+    <title>Tic Tac Toe</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <button id="home-button" class="brand" type="button" aria-label="Tic Tac Toe home">
+          <span class="brand-icon" aria-hidden="true"><i class="mark x"></i><i class="mark o"></i></span>
+          <span>Tic Tac Toe</span>
+        </button>
+        <div class="toolbar">
+          <button id="sound-button" class="button icon-button" type="button" aria-label="Sound" aria-pressed="true">
+            <span id="sound-on"><i data-lucide="volume-2"></i></span>
+            <span id="sound-off" hidden><i data-lucide="volume-x"></i></span>
+          </button>
+          <button id="install-button" class="button install-button" type="button" hidden><i data-lucide="download"></i> Install app</button>
+          <button id="install-help-button" class="button install-button" type="button"><i data-lucide="download"></i> <span id="install-help-label">Install app</span></button>
+          <button id="update-button" class="button install-button" type="button" hidden><i data-lucide="refresh-cw"></i> Update app</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="home" aria-labelledby="home-title">
+        <div class="hero">
+          <div class="hero-copy">
+            <h1 id="home-title" tabindex="-1">Tic Tac <span>Toe<span class="title-period">.</span></span></h1>
+            <p>Three in a row. Your move.</p>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="orbit orbit-outer"></div><div class="orbit orbit-inner"></div>
+            <i class="sparkle sparkle-one"></i><i class="sparkle sparkle-two"></i><i class="sparkle sparkle-three"></i>
+            <div class="art-board">
+              <div><i class="mark x"></i></div><div></div><div><i class="mark o"></i></div>
+              <div></div><div><i class="mark x"></i></div><div></div>
+              <div><i class="mark o"></i></div><div></div><div><i class="mark x"></i></div>
+              <span class="art-strike"></span>
+            </div>
+          </div>
+        </div>
+        <div class="mode-heading">
+          <h2>Choose a mode</h2>
+          <button class="text-button" data-dialog="rules" type="button"><i data-lucide="circle-help"></i> How to play</button>
+        </div>
+        <div class="mode-grid">
+          <button class="mode-card mode-ai" data-mode="ai" type="button">
+            <span class="mode-icon"><i data-lucide="bot"></i></span>
+            <span class="mode-copy"><strong>AI Battle</strong><span>Take on T-3PO at three difficulty levels.</span></span>
+            <span class="mode-arrow"><i data-lucide="arrow-up-right"></i></span>
+          </button>
+          <button class="mode-card mode-local" data-mode="local" type="button">
+            <span class="mode-icon"><i data-lucide="users-round"></i></span>
+            <span class="mode-copy"><strong>Local PvP</strong><span>Pass the screen and play side by side.</span></span>
+            <span class="mode-arrow"><i data-lucide="arrow-up-right"></i></span>
+          </button>
+          <button class="mode-card mode-online" data-mode="online" type="button">
+            <span class="mode-icon"><i data-lucide="radio"></i></span>
+            <span class="mode-copy"><strong>Play Online</strong><span>Invite a friend with a room code or link.</span></span>
+            <span class="mode-arrow"><i data-lucide="arrow-up-right"></i></span>
+          </button>
+        </div>
+      </section>
+
+      <section id="setup" class="setup-screen inner-screen" aria-labelledby="setup-title" hidden>
+        <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> All modes</button>
+        <h1 id="setup-title" class="screen-title" tabindex="-1"></h1>
+        <p id="setup-description" class="screen-intro"></p>
+        <form id="setup-form">
+          <div class="setup-grid">
+            <div id="profile-one" class="panel profile"></div>
+            <div id="profile-two" class="panel profile"></div>
+            <fieldset id="ai-options" class="panel profile">
+              <div class="profile-heading"><span class="profile-icon"><i data-lucide="bot"></i></span><span><strong>T-3PO</strong><small>Computer opponent</small></span></div>
+              <fieldset class="difficulty-field">
+                <legend>Difficulty</legend>
+                <div class="difficulty-grid">
+                  <label><input type="radio" name="difficulty" value="easy"><span>Easy</span></label>
+                  <label><input type="radio" name="difficulty" value="medium"><span>Medium</span></label>
+                  <label><input type="radio" name="difficulty" value="hard"><span>Hard</span></label>
+                </div>
+                <p id="difficulty-hint" class="small-copy"></p>
+              </fieldset>
+            </fieldset>
+            <div id="online-options" class="panel profile">
+              <div class="profile-heading"><span class="profile-icon online-icon"><i data-lucide="radio"></i></span><span><strong>Online room</strong><small>Two devices</small></span></div>
+              <label for="join-code">Join with a code</label>
+              <div class="join-row">
+                <input class="name-input code-input" id="join-code" placeholder="ABC23" maxlength="5" spellcheck="false" autocomplete="off" autocapitalize="characters">
+                <button id="join-button" class="button" type="submit">Join room</button>
+              </div>
+              <p id="join-error" role="status" class="small-copy form-error"></p>
+            </div>
+          </div>
+          <div class="setup-actions">
+            <button id="start-button" class="button primary" type="submit">Start battle <i data-lucide="arrow-right"></i></button>
+            <button id="host-button" class="button primary" type="submit">Create a room <i data-lucide="arrow-right"></i></button>
+            <button id="resume-button" class="button" type="button">Resume match</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="room" class="inner-screen room-screen" aria-labelledby="room-title" hidden>
+        <button id="room-back" class="text-button back-button" type="button"><i data-lucide="arrow-left"></i> Player setup</button>
+        <h1 id="room-title" class="screen-title" tabindex="-1">Online room</h1>
+        <div class="panel lobby">
+          <span class="profile-icon online-icon lobby-icon"><i data-lucide="radio"></i></span>
+          <p id="room-status" role="status"></p>
+          <div id="invite" hidden>
+            <p class="field-label">Room code</p>
+            <strong id="room-code"></strong>
+            <canvas id="room-qr" width="176" height="176" role="img" aria-label="QR code for this room invitation"></canvas>
+            <div class="lobby-actions">
+              <button id="copy-room" class="button" type="button"><i data-lucide="link-2"></i> Copy link</button>
+              <button id="share-room" class="button" type="button" hidden><i data-lucide="share-2"></i> Share invite</button>
+            </div>
+            <input class="name-input" id="invite-link" aria-label="Room invitation link" readonly hidden>
+          </div>
+        </div>
+      </section>
+
+      <section id="game" class="inner-screen game-screen" aria-labelledby="game-title" hidden>
+        <div class="game-heading">
+          <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> All modes</button>
+          <span id="round-counter"></span>
+        </div>
+        <div class="game-layout">
+          <div class="game-info">
+            <p id="game-mode" class="field-label"></p>
+            <h1 class="screen-title" id="game-title" tabindex="-1">Battleground</h1>
+            <p id="turn-status" role="status" class="turn-status"></p>
+            <div id="players" class="player-grid"></div>
+            <div class="score-panel">
+              <h2>Match score</h2>
+              <dl id="score" class="score-grid"></dl>
+            </div>
+          </div>
+          <div class="board-side">
+            <div class="board-wrap">
+              <div id="board" class="board" role="group" aria-label="Tic Tac Toe board"></div>
+              <div id="strike" class="strike" hidden></div>
+            </div>
+            <button id="result-button" class="button board-action" type="button" hidden>Round result</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="rules-dialog" aria-labelledby="rules-title">
+      <span class="dialog-icon" aria-hidden="true"><i data-lucide="grid-3x3"></i></span>
+      <h2 id="rules-title">How to play</h2>
+      <p>X goes first. Take turns claiming empty squares. Line up three marks across, down, or diagonally to win.</p>
+      <p>If the board fills up, it’s a draw. On a rematch, players swap marks and the new X goes first.</p>
+      <form method="dialog"><button class="button primary" autofocus>Got it</button></form>
+    </dialog>
+
+    <dialog id="install-dialog" aria-labelledby="install-title">
+      <span class="dialog-icon" aria-hidden="true"><i data-lucide="download"></i></span>
+      <h2 id="install-title">Install Tic Tac Toe</h2>
+      <p>Open the game from your home screen and play AI Battle or Local PvP offline after the first visit.</p>
+      <p id="install-steps"></p>
+      <form method="dialog"><button class="button primary" autofocus>Got it</button></form>
+    </dialog>
+
+    <dialog id="leave-dialog" aria-labelledby="leave-title">
+      <h2 id="leave-title">Leave this room?</h2>
+      <p>Your opponent will be disconnected.</p>
+      <form method="dialog" class="dialog-actions">
+        <button class="button" value="stay" autofocus>Keep playing</button>
+        <button class="button primary" value="leave">Leave room</button>
+      </form>
+    </dialog>
+
+    <dialog id="result-dialog" class="result-dialog" aria-labelledby="result-title">
+      <canvas id="confetti" aria-hidden="true"></canvas>
+      <div class="result-content">
+        <div id="result-trophy" class="trophy" aria-hidden="true"><i data-lucide="trophy"></i></div>
+        <div id="result-draw" class="trophy draw-icon" aria-hidden="true" hidden><i data-lucide="equal"></i></div>
+        <p class="field-label result-caption">Round complete</p>
+        <h2 id="result-title"></h2>
+        <p id="result-detail"></p>
+        <form method="dialog" class="dialog-actions">
+          <button class="button" value="menu">All modes</button>
+          <button id="rematch-button" class="button primary" value="rematch" autofocus><i data-lucide="rotate-ccw"></i> <span id="rematch-label">Rematch</span></button>
+        </form>
+      </div>
+    </dialog>
+
+    <div id="notice" class="notice" role="status"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
