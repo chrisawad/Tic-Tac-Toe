@@ -125,6 +125,20 @@ function profileFields(slot: 'one' | 'two', label: string, mark: 'X' | 'O', prof
 }
 
 let setupEvents = new AbortController();
+function setRoomRole(joining: boolean) {
+  form.querySelector<HTMLInputElement>(`[name="room-role"][value="${joining ? 'guest' : 'host'}"]`)!.checked = true;
+  element('code-field').hidden = !joining;
+  joinCode.disabled = !joining;
+  joinError.textContent = '';
+  element('room-hint').textContent = joining
+    ? 'Use the five-character code from your friend.'
+    : 'Create a room to get a code, link, and QR invite to share.';
+  element('start-label').textContent = joining ? 'Join room' : 'Create a room';
+  const icon = element('profile-one').querySelector<HTMLElement>('.profile-icon')!;
+  icon.innerHTML = markMarkup(joining ? 'O' : 'X');
+  element('profile-one').querySelector('small')!.textContent = joining ? 'Starts as O' : 'Starts as X';
+}
+
 function openSetup(next: Mode, code = '') {
   mode = next;
   setupEvents.abort();
@@ -140,9 +154,11 @@ function openSetup(next: Mode, code = '') {
   element('setup-description').textContent = modeInfo[mode][1];
   element('profile-two').hidden = mode !== 'local';
   element('ai-options').hidden = mode !== 'ai';
-  element('online-options').hidden = mode !== 'online';
-  element('start-button').hidden = mode === 'online';
-  element('host-button').hidden = mode !== 'online';
+  element('room-choice').hidden = mode !== 'online';
+  form.classList.toggle('online-form', mode === 'online');
+  element('setup-description').hidden = mode === 'online';
+  if (mode === 'online') setRoomRole(Boolean(code));
+  else element('start-label').textContent = 'Start battle';
   element('resume-button').hidden = mode === 'online' || !savedMode(mode);
   joinCode.value = code;
   joinError.textContent = '';
@@ -370,7 +386,13 @@ function connect(profile: Player, code: string | null) {
   try {
     room = openRoom(profile, code, {
       waiting: nextCode => void showInvite(nextCode),
-      start: (newMatch, index) => { roomPlayer = index; startGame(newMatch); },
+      start: (newMatch, index) => {
+        roomPlayer = index;
+        startGame(newMatch);
+        if (index === 1 && newMatch.players[1].color !== profile.color) {
+          notify(`You’re playing ${newMatch.players[1].color}. Your host picked ${profile.color} too.`);
+        }
+      },
       action: action => receive(action, roomPlayer === 0 ? 1 : 0),
       failure: message => {
         room = undefined;
@@ -454,6 +476,7 @@ element('resume-button').addEventListener('click', () => {
 form.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
   if (input.name === 'difficulty') setDifficulty(input.value as Difficulty);
+  if (input.name === 'room-role') setRoomRole(input.value === 'guest');
 });
 joinCode.addEventListener('input', () => { joinError.textContent = ''; });
 form.addEventListener('submit', event => {
@@ -464,7 +487,7 @@ form.addEventListener('submit', event => {
   save('profiles:' + mode, [first, second]);
   audio.unlock();
   if (mode === 'online') {
-    if (event.submitter?.id === 'host-button') {
+    if (input.get('room-role') === 'host') {
       connect(first, null);
       return;
     }

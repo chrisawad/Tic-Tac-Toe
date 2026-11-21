@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { aiMove, boardFor, createMatch, defaultPlayers, markFor, move, nextRound, playerFor, restoreMatch, resultFor, scoresFor, turn, type Match } from '../src/game';
-import { applyRoomMove, readyForRematch, roundAction } from '../src/online';
+import { applyRoomMove, assignGuestColor, readyForRematch, roundAction } from '../src/online';
 
 function play(cells: number[], match = createMatch(defaultPlayers)): Match {
   return cells.reduce((state, cell) => move(state, cell, playerFor(state, turn(state)))!, match);
@@ -66,6 +66,13 @@ describe('computer opponent', () => {
 });
 
 describe('room protocol', () => {
+  it('preserves distinct selections and can draw every other color on a conflict', () => {
+    expect(assignGuestColor('mint', 'blue')).toBe('blue');
+    const alternatives = Array.from({ length: 6 }, (_, index) =>
+      assignGuestColor('mint', 'mint', () => (index + .5) / 6));
+    expect(new Set(alternatives).size).toBe(6);
+    expect(alternatives).not.toContain('mint');
+  });
   it('rejects malformed, stale, duplicate, and out-of-turn moves', () => {
     const first = createMatch(defaultPlayers);
     const action = { kind: 'move', round: 1, ply: 0, cell: 4 } as const;

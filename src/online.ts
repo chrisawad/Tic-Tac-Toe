@@ -1,5 +1,5 @@
 import { Peer, type DataConnection } from 'peerjs';
-import { createMatch, isPlayer, move, nextRound, type Match, type Player, type PlayerIndex } from './game';
+import { createMatch, isPlayer, move, nextRound, palette, type Color, type Match, type Player, type PlayerIndex } from './game';
 
 const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const prefix = 'chrisawad-tic-tac-toe-v1-';
@@ -7,6 +7,12 @@ export const isRoomCode = (value: string) => /^[A-HJ-NP-Z2-9]{5}$/.test(value);
 
 function newCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(5)), value => letters[value % letters.length]).join('');
+}
+
+export function assignGuestColor(host: Color, guest: Color, random = Math.random): Color {
+  if (guest !== host) return guest;
+  const available = (Object.keys(palette) as Color[]).filter(color => color !== host);
+  return available[Math.floor(random() * available.length)];
 }
 
 export type RoundAction =
@@ -90,7 +96,7 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
       }
     });
     connection.on('open', () => {
-      if (!host && !closed) transmit({ kind: 'hello', profile });
+      if (!host && !closed) transmit({ kind: 'hello', profile, acceptsColor: true });
     });
     connection.on('data', data => {
       if (closed || !data || typeof data !== 'object') return;
@@ -104,9 +110,18 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
         if (action) handlers.action(action);
         return;
       }
-      const message = data as { kind?: unknown; profile?: unknown };
+      const message = data as { kind?: unknown; profile?: unknown; acceptsColor?: unknown; guestColor?: unknown };
       if (message.kind !== (host ? 'hello' : 'welcome') || !isPlayer(message.profile)) return;
-      if (host && !transmit({ kind: 'welcome', profile })) return;
+      const players: [Player, Player] = host ? [profile, message.profile] : [message.profile, profile];
+      if (host) {
+        // Earlier clients use their selected color locally and ignore welcome overrides.
+        const color = message.acceptsColor === true
+          ? assignGuestColor(profile.color, players[1].color) : players[1].color;
+        players[1] = { ...players[1], color };
+        if (!transmit({ kind: 'welcome', profile, guestColor: color })) return;
+      } else if (typeof message.guestColor === 'string' && Object.hasOwn(palette, message.guestColor)) {
+        players[1] = { ...profile, color: message.guestColor as Color };
+      }
       playing = true;
       cancelTimeout();
       lastMessage = performance.now();
@@ -114,7 +129,6 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
         if (performance.now() - lastMessage > 25_000) fail('Your opponent left the room.');
         else transmit({ kind: 'ping' });
       }, 5_000);
-      const players: [Player, Player] = host ? [profile, message.profile] : [message.profile, profile];
       handlers.start(createMatch(players), host ? 0 : 1);
     });
     connection.on('close', () => fail(playing ? 'Your opponent left the room.' : 'The room closed before the match could start.'));

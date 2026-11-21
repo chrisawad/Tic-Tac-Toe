@@ -74,6 +74,18 @@
         <h1 id="setup-title" class="screen-title" tabindex="-1"></h1>
         <p id="setup-description" class="screen-intro"></p>
         <form id="setup-form">
+          <fieldset id="room-choice" hidden>
+            <legend class="field-label">Room options</legend>
+            <div class="difficulty-grid room-switch">
+              <label><input type="radio" name="room-role" value="host" checked><span>Host a game</span></label>
+              <label><input type="radio" name="room-role" value="guest"><span>Join a friend</span></label>
+            </div>
+            <p id="room-hint" class="small-copy"></p>
+            <div id="code-field" hidden>
+              <label for="join-code" class="field-label">Room code</label>
+              <input class="name-input code-input" id="join-code" aria-describedby="join-error" placeholder="ABC23" maxlength="5" spellcheck="false" autocomplete="off" autocapitalize="characters">
+            </div>
+          </fieldset>
           <div class="setup-grid">
             <div id="profile-one" class="panel profile"></div>
             <div id="profile-two" class="panel profile"></div>
@@ -89,21 +101,12 @@
                 <p id="difficulty-hint" class="small-copy"></p>
               </fieldset>
             </fieldset>
-            <div id="online-options" class="panel profile">
-              <div class="profile-heading"><span class="profile-icon online-icon"><i data-lucide="radio"></i></span><span><strong>Online room</strong><small>Two devices</small></span></div>
-              <label for="join-code">Join with a code</label>
-              <div class="join-row">
-                <input class="name-input code-input" id="join-code" placeholder="ABC23" maxlength="5" spellcheck="false" autocomplete="off" autocapitalize="characters">
-                <button id="join-button" class="button" type="submit">Join room</button>
-              </div>
-              <p id="join-error" role="status" class="small-copy form-error"></p>
-            </div>
           </div>
           <div class="setup-actions">
-            <button id="start-button" class="button primary" type="submit">Start battle <i data-lucide="arrow-right"></i></button>
-            <button id="host-button" class="button primary" type="submit">Create a room <i data-lucide="arrow-right"></i></button>
+            <button id="start-button" class="button primary" type="submit"><span id="start-label">Start battle</span> <i data-lucide="arrow-right"></i></button>
             <button id="resume-button" class="button" type="button">Resume match</button>
           </div>
+          <p id="join-error" role="status" class="small-copy form-error"></p>
         </form>
       </section>
 
@@ -143,9 +146,11 @@
             </div>
           </div>
           <div class="board-side">
-            <div class="board-wrap">
-              <div id="board" class="board" role="group" aria-label="Tic Tac Toe board"></div>
-              <div id="strike" class="strike" hidden></div>
+            <div class="board-space">
+              <div class="board-wrap">
+                <div id="board" class="board" role="group" aria-label="Tic Tac Toe board"></div>
+                <div id="strike" class="strike" hidden></div>
+              </div>
             </div>
             <button id="result-button" class="button board-action" type="button" hidden>Round result</button>
           </div>

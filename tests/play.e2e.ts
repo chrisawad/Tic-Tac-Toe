@@ -160,6 +160,38 @@ test('start screen and playfield fit the narrowest phone layout', async ({ page 
   expect(await width()).toBe(320);
   await page.getByRole('button', { name: 'Start battle' }).click();
   expect(await width()).toBe(320);
+  for (const [w, h] of [[320, 480], [568, 320], [390, 844], [768, 1024], [1440, 900], [1920, 1080]]) {
+    await page.setViewportSize({ width: w, height: h });
+    const layout = await page.locator('#board').evaluate(board => {
+      const rect = board.getBoundingClientRect();
+      const slot = board.closest('.board-space')!.getBoundingClientRect();
+      return { size: rect.width, height: rect.height, available: Math.min(slot.width, slot.height, 600),
+        documentHeight: document.documentElement.scrollHeight, documentWidth: document.documentElement.scrollWidth };
+    });
+    expect(layout.size).toBeCloseTo(layout.height, 0);
+    expect(layout.size).toBeCloseTo(layout.available, 0);
+    expect(layout.size).toBeGreaterThan(150);
+    if (w === 320) expect(layout.size).toBeGreaterThan(260);
+    if (w === 1920) expect(layout.size).toBe(600);
+    expect(layout.documentWidth).toBe(w);
+    expect(layout.documentHeight, `viewport ${w} × ${h}`).toBeLessThanOrEqual(h + 1);
+  }
+});
+
+test('online setup keeps host and join actions distinct and routes invites to Join', async ({ page }) => {
+  await page.goto('./');
+  await mode(page, 'online').click();
+  await expect(page.getByRole('button', { name: 'Create a room' })).toBeVisible();
+  await expect(page.getByLabel('Room code', { exact: true })).toBeHidden();
+  await page.getByText('Join a friend', { exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create a room' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Join room' }).click();
+  await expect(page.locator('#join-error')).toContainText('five-character');
+  await page.getByText('Host a game', { exact: true }).click();
+  await expect(page.locator('#join-error')).toBeEmpty();
+  await page.goto('./?room=ABC23');
+  await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
+  await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
 });
 
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }, testInfo) => {
@@ -179,9 +211,16 @@ test('real online room carries a game and rematch between two browser contexts',
     await guest.goto(invite);
     await expect(guest.locator('#join-code')).toHaveValue((await code.textContent())!);
     await name(guest, 'one').fill('Guest');
+    await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });
     await guest.getByRole('button', { name: 'Join room' }).click();
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 24000 });
     await expect(guest.locator('#turn-status')).toHaveText('Host’s turn · X');
+    const playerColors = (p: Page) => p.locator('.player-card').evaluateAll(cards =>
+      cards.map(card => (card as HTMLElement).style.getPropertyValue('--player')));
+    const assigned = await playerColors(page);
+    expect(assigned[0]).toBe('#ad98ff');
+    expect(assigned[1]).not.toBe(assigned[0]);
+    expect(await playerColors(guest)).toEqual(assigned);
     for (const [player, cell] of [[page, 0], [guest, 3], [page, 1], [guest, 4], [page, 2]] as const) {
       await square(player, cell).click();
     }
@@ -195,6 +234,7 @@ test('real online room carries a game and rematch between two browser contexts',
     await expect(guest.locator('#turn-status')).toHaveText('Your turn · X');
     await expect(page.locator('#round-counter')).toHaveText('Round 2');
     await expect(guest.locator('#score dd')).toHaveText(['1', '0', '0']);
+    expect(await playerColors(guest)).toEqual(assigned);
   } finally {
     await guest.close();
   }
