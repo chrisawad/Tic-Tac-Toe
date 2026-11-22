@@ -22,7 +22,7 @@ it('sends the API key only to the upstream and returns uncached temporary creden
   expect(await result.json()).toEqual({ iceServers });
   expect(env.CREDENTIAL_REQUESTS.limit).toHaveBeenCalledWith({ key: '192.0.2.1' });
   expect(upstream).toHaveBeenCalledWith('https://rtc.live.cloudflare.com/v1/turn/keys/test-turn-id/credentials/generate-ice-servers',
-    expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer test-api-key' }), body: JSON.stringify({ ttl: 7200 }) }));
+    expect.objectContaining({ method: 'POST', redirect: 'manual', headers: expect.objectContaining({ Authorization: 'Bearer test-api-key' }), body: JSON.stringify({ ttl: 7200 }) }));
 });
 
 it('avoids upstream calls for foreign origins, incomplete setups and rate-limited clients', async () => {
@@ -33,4 +33,11 @@ it('avoids upstream calls for foreign origins, incomplete setups and rate-limite
   expect((await worker.fetch(request(), { ...bindings(), TURN_API_TOKEN: '' })).status).toBe(503);
   expect((await worker.fetch(request(), bindings(false))).status).toBe(429);
   expect(upstream).not.toHaveBeenCalled();
+});
+
+it.each([302, 401])('keeps upstream details private on a redirect or credential error (%i)', async status => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('private upstream body', { status })));
+  const failed = await worker.fetch(request(), bindings());
+  expect(failed.status).toBe(502);
+  expect(await failed.json()).toEqual({ message: 'Cloudflare TURN returned HTTP ' + status + '.' });
 });
