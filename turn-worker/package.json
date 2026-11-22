@@ -1,5 +1,5 @@
 {
-  "name": "tic-tac-toe-turn",
+  "name": "public-games-turn",
   "private": true,
   "type": "module",
   "cloudflare": {
