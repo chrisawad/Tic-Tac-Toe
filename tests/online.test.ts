@@ -4,17 +4,21 @@ import { defaultPlayers } from '../src/game';
 import { openRoom } from '../src/online';
 
 const { createPeer } = vi.hoisted(() => ({ createPeer: vi.fn() }));
-vi.mock('peerjs', () => ({ Peer: class { constructor(id: string, options?: { token: string }) { return createPeer(id, options); } } }));
+vi.mock('peerjs', () => ({
+  util: { defaultConfig: { iceServers: [{ urls: 'turn:relay.example', username: 'host', credential: 'sample' }] } },
+  Peer: class { constructor(id: string, options: { config: RTCConfiguration; token?: string }) { return createPeer(id, options); } },
+}));
 
 function attempt(serviceConnected = true) {
-  const rtc = Object.assign(new EventTarget(), { remoteDescription: null as { type: 'answer' } | null });
+  const rtc = Object.assign(new EventTarget(), { remoteDescription: null as { type: 'answer' } | null, iceConnectionState: 'new' });
   const channel = Object.assign(new EventEmitter(), { peerConnection: rtc, open: false, send: vi.fn() });
   const peer = Object.assign(new EventEmitter(), { open: serviceConnected, destroy: vi.fn(), connect: () => channel });
   createPeer.mockReturnValue(peer);
   const failure = vi.fn();
-  openRoom(defaultPlayers[1], 'ABC23', { waiting: vi.fn(), start: vi.fn(), action: vi.fn(), failure });
+  const start = vi.fn();
+  openRoom(defaultPlayers[1], 'ABC23', { waiting: vi.fn(), start, action: vi.fn(), failure });
   if (serviceConnected) peer.emit('open');
-  return { rtc, channel, peer, failure };
+  return { rtc, channel, peer, failure, start };
 }
 
 describe('room failure messages', () => {
@@ -33,11 +37,38 @@ describe('room failure messages', () => {
   ] as const)('uses evidence from %s (%s, relay gathered = %s)', (url, errorText, gathered, expected) => {
     const { rtc, failure } = attempt();
     rtc.remoteDescription = { type: 'answer' };
+    rtc.iceConnectionState = 'failed';
     rtc.dispatchEvent(Object.assign(new Event('icecandidateerror'), { url, errorCode: 701, errorText }));
     if (gathered) rtc.dispatchEvent(Object.assign(new Event('icecandidate'), { candidate: { type: 'relay' } }));
     expect(failure).not.toHaveBeenCalled();
     vi.advanceTimersByTime(16_000);
     expect(failure).toHaveBeenCalledWith(expect.stringContaining(expected), undefined);
+  });
+
+  it('can start on a slow direct path after a relay DNS error', () => {
+    const { rtc, channel, failure, start } = attempt();
+    rtc.remoteDescription = { type: 'answer' };
+    rtc.iceConnectionState = 'checking';
+    rtc.dispatchEvent(Object.assign(new Event('icecandidateerror'), {
+      url: 'turn:relay.example', errorCode: 701, errorText: 'TURN host lookup received error.',
+    }));
+    vi.advanceTimersByTime(23_000);
+    expect(failure).not.toHaveBeenCalled();
+    channel.open = true;
+    channel.emit('open');
+    channel.emit('data', { kind: 'welcome', profile: defaultPlayers[0] });
+    vi.advanceTimersByTime(18_000);
+    expect(start).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
+  });
+
+  it('reports a game channel timeout separately when a network path already connected', () => {
+    const { rtc, channel, failure } = attempt();
+    rtc.remoteDescription = { type: 'answer' };
+    rtc.iceConnectionState = 'completed';
+    channel.emit('iceStateChanged', 'completed');
+    vi.advanceTimersByTime(40_000);
+    expect(failure).toHaveBeenCalledWith(expect.stringContaining('devices reached each other'), undefined);
   });
 
   it('distinguishes a missing host reply from a room lookup failure', () => {
@@ -78,7 +109,7 @@ describe('room failure messages', () => {
     const failure = vi.fn();
     openRoom(defaultPlayers[0], null, { waiting: vi.fn(), start: vi.fn(), action: vi.fn(), failure }, { code: 'ABC23' });
     peer.emit('error', { type: 'unavailable-id' });
-    expect(createPeer).toHaveBeenCalledExactlyOnceWith('chrisawad-tic-tac-toe-v1-ABC23', { token: expect.any(String) });
+    expect(createPeer).toHaveBeenCalledExactlyOnceWith('chrisawad-tic-tac-toe-v1-ABC23', expect.objectContaining({ token: expect.any(String) }));
     expect(failure).toHaveBeenCalledWith(expect.stringContaining('Room ABC23 is still in use'), undefined);
   });
 
@@ -94,7 +125,7 @@ describe('room failure messages', () => {
     const next = Object.assign(new EventEmitter(), { destroy: vi.fn() });
     createPeer.mockReturnValue(next);
     openRoom(defaultPlayers[0], null, handlers, { code, token });
-    expect(createPeer).toHaveBeenLastCalledWith('chrisawad-tic-tac-toe-v1-' + code, { token });
+    expect(createPeer).toHaveBeenLastCalledWith('chrisawad-tic-tac-toe-v1-' + code, expect.objectContaining({ token }));
     next.emit('open');
     expect(waiting).toHaveBeenLastCalledWith(code, token);
   });

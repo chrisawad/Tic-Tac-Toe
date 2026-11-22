@@ -1,4 +1,4 @@
-import { Peer, type DataConnection } from 'peerjs';
+import { Peer, util, type DataConnection } from 'peerjs';
 import { createMatch, isPlayer, move, nextRound, palette, type Color, type Match, type Player, type PlayerIndex } from './game';
 
 const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -45,6 +45,7 @@ type RoomFailure = 'service' | 'host' | 'guest' | 'other-window';
 
 type Handlers = {
   waiting: (code: string, token: string) => void;
+  connecting?: () => void;
   start: (match: Match, index: PlayerIndex) => void;
   action: (action: RoundAction) => void;
   failure: (message: string, reason?: RoomFailure) => void;
@@ -54,13 +55,22 @@ export const offlineMessage = 'This device appears to be offline. Reconnect to t
 const serviceFailure = 'This device couldn’t reach the room service. Check your internet connection and try again.';
 const serviceLost = 'This device lost its connection to the room service. Check your internet connection and try again.';
 const lostOpponent = 'Lost contact with your opponent. Check that both devices are online, then create a new room.';
+const wifiHelp = 'On shared Wi-Fi, check whether the router isolates devices, especially on a guest network.';
+const rtcConfig: RTCConfiguration = {
+  ...util.defaultConfig,
+  iceServers: [...util.defaultConfig.iceServers, { urls: 'stun:stun.cloudflare.com:3478' }],
+};
 
 function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal) {
   const pc = connection.peerConnection;
   let opened = false;
+  let networkConnected = false;
   let gatheredRelay = false;
   let relayIssue = '';
   connection.on('open', () => { opened = true; });
+  connection.on('iceStateChanged', state => {
+    if (state === 'connected' || state === 'completed') networkConnected = true;
+  });
   pc.addEventListener('icecandidate', event => {
     if (event.candidate?.type === 'relay') gatheredRelay = true;
   }, { signal });
@@ -76,8 +86,11 @@ function trackConnectionSetup(connection: DataConnection, host: boolean, signal:
   return () => {
     if (opened) return 'The devices connected, but game setup didn’t finish. Return to the game on both devices and try joining again.';
     if (!host && !pc.remoteDescription) return 'No reply arrived from the host. Ask them to keep the room open and share their current code.';
-    if (relayIssue && !gatheredRelay) return `Room found. ${relayIssue} Try the same home Wi-Fi or switch networks, then try joining again.`;
-    return 'Room found, but the devices couldn’t establish a game connection. Try the same home Wi-Fi or switch networks, then try joining again.';
+    if (networkConnected || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      return 'Room found. The devices reached each other, but the game channel didn’t open. Keep both games on screen and try joining again.';
+    }
+    if (relayIssue && !gatheredRelay) return `Room found, but no direct connection opened. ${relayIssue} ${wifiHelp}`;
+    return `Room found, but the devices couldn’t establish a game connection. ${wifiHelp}`;
   };
 }
 
@@ -133,7 +146,16 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     if (closed || channel) { connection.close(); return; }
     channel = connection;
     joinFailure = trackConnectionSetup(connection, host, listeners.signal);
-    timeLimit(failConnection);
+    timeLimit(() => {
+      const pc = connection.peerConnection;
+      // A relay lookup can fail while ICE is still checking a usable direct route.
+      if (!connection.open && pc.remoteDescription && ['new', 'checking', 'connected', 'completed'].includes(pc.iceConnectionState)) {
+        countdown = window.setTimeout(failConnection, 24_000);
+        handlers.connecting?.();
+      } else {
+        failConnection();
+      }
+    });
     connection.on('iceStateChanged', state => {
       window.clearTimeout(connectionLost);
       if (!closed && playing && state === 'disconnected') {
@@ -194,8 +216,8 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
   function register(roomCode: string) {
     attempts++;
     const registered = hostToken
-      ? new Peer(prefix + roomCode, { token: hostToken })
-      : new Peer(prefix + 'guest-' + crypto.randomUUID());
+      ? new Peer(prefix + roomCode, { token: hostToken, config: rtcConfig })
+      : new Peer(prefix + 'guest-' + crypto.randomUUID(), { config: rtcConfig });
     peer = registered;
     timeLimit(() => fail('The room service didn’t respond in time. Check your internet connection and try again.', 'service'));
     registered.on('open', () => {

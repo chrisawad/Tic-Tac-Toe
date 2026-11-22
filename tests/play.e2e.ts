@@ -404,6 +404,35 @@ test('an older saved room with an occupied code offers a new invite immediately'
   await expect(page.locator('#room-code')).not.toHaveText('ABC23');
 });
 
+test('two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
+  test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
+  test.setTimeout(65_000);
+  const secondBrowser = await playwright.chromium.launch();
+  try {
+    const guest = await secondBrowser.newPage({ isMobile });
+    for (const playerPage of [page, guest]) {
+      await playerPage.addInitScript(() => {
+        window.RTCPeerConnection = class extends RTCPeerConnection {
+          constructor(config?: RTCConfiguration) {
+            super({ ...config, iceServers: [{ urls: 'turn:relay.invalid:3478', username: 'test', credential: 'test' }] });
+          }
+        };
+      });
+    }
+    await visit(page);
+    await mode(page, 'online').click();
+    await page.getByRole('button', { name: 'Create a room' }).click();
+    await expect(page.locator('#room-qr')).toBeVisible();
+    await guest.goto(await page.locator('#invite-link').inputValue());
+    await guest.getByRole('button', { name: 'Join room' }).click();
+    await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
+    await square(page, 4).click();
+    await expect(guest.locator('#turn-status')).toHaveText('Your turn · O');
+  } finally {
+    await secondBrowser.close();
+  }
+});
+
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live online room smoke test');
   test.setTimeout(85_000);

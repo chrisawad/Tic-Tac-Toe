@@ -437,6 +437,7 @@ function connect(profile: Player, code: string | null) {
         rememberHostLobby(hostLobby);
         void showInvite(nextCode);
       },
+      connecting: () => { element('room-status').textContent = 'Room found. Still connecting the devices… Keep both games on screen.'; },
       start: (newMatch, index) => {
         clearLobby();
         roomPlayer = index;
