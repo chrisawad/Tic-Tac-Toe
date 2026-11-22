@@ -3,8 +3,10 @@ export default {
     const headers = { 'Cache-Control': 'no-store', 'Vary': 'Origin' };
     const reply = (status, message) => Response.json({ message }, { status, headers });
     if (new URL(request.url).pathname !== '/') return reply(404, 'Unknown endpoint.');
-    if (request.headers.get('Origin') !== env.GAME_ORIGIN) return reply(403, 'Unknown game origin.');
-    headers['Access-Control-Allow-Origin'] = env.GAME_ORIGIN;
+    const origin = request.headers.get('Origin');
+    const origins = (env.GAME_ORIGINS ?? env.GAME_ORIGIN ?? '').split(',').map(entry => entry.trim());
+    if (!origin || origin === 'null' || !origins.includes(origin)) return reply(403, 'Unknown game origin.');
+    headers['Access-Control-Allow-Origin'] = origin;
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: { ...headers, 'Access-Control-Allow-Methods': 'POST' } });
     }

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { observeConnectionRoute } from '../src/connection-route';
+import { observeConnectionRoute } from '../src/multiplayer/connection-route';
 
 function monitor(pair: () => unknown, getStats = vi.fn().mockResolvedValue(new Map())) {
   const ice = Object.assign(new EventTarget(), { getSelectedCandidatePair: pair });

@@ -10,6 +10,20 @@ function bindings(success = true) {
 }
 afterEach(() => vi.unstubAllGlobals());
 
+it('reflects only individually allowed game origins, including on preflight', async () => {
+  const env = { ...bindings(), GAME_ORIGINS: origin + ', https://second.example' };
+  for (const allowed of [origin, 'https://second.example']) {
+    const result = await worker.fetch(request('OPTIONS', allowed), env);
+    expect(result.status).toBe(204);
+    expect(result.headers.get('access-control-allow-origin')).toBe(allowed);
+  }
+  for (const rejected of ['https://second.example.evil.example', 'http://second.example', 'null']) {
+    const result = await worker.fetch(request('OPTIONS', rejected), env);
+    expect(result.status).toBe(403);
+    expect(result.headers.has('access-control-allow-origin')).toBe(false);
+  }
+});
+
 it('sends the API key only to the upstream and returns uncached temporary credentials', async () => {
   const iceServers = [{ urls: ['turn:turn.cloudflare.com:3478'], username: 'short-lived', credential: 'temporary' }];
   const upstream = vi.fn(async () => Response.json({ iceServers, other: 'unused' }));
