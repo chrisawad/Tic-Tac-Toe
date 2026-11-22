@@ -260,7 +260,7 @@ svg.lucide { display: block; width: 1.1em; height: 1.1em; flex: none; }
 #code-field input { margin-bottom: 0; }
 .online-form .setup-actions .primary { width: 100%; }
 .form-error:empty { display: none; }
-.form-error:not(:empty) { margin-top: 12px; }
+.form-error:not(:empty) { margin-bottom: 12px; padding: 10px 14px; border-inline-start: 3px solid currentColor; background: var(--panel); }
 .code-input { text-transform: uppercase; letter-spacing: .15em; font-weight: 650; }
 .form-error { color: #ffb0b2; min-height: 1.3em; }
 .room-screen { max-width: 640px; }
@@ -570,6 +570,8 @@ dialog form { margin-top: 23px; }
   .online-form { align-items: start; align-content: start; }
   .online-form .setup-grid { grid-area: 1 / 2 / span 3; }
   .online-form #room-choice, .online-form .setup-actions, .online-form .form-error { grid-column: 1; margin: 0; }
+  .online-form .form-error:not(:empty) { grid-area: 1 / 1 / auto / -1; }
+  .online-form:has(.form-error:not(:empty)) .setup-grid { grid-row: 2 / span 3; }
   .lobby { padding: 12px; margin-top: 4px; }
   .lobby:has(#invite:not([hidden])) .lobby-icon { display: none; }
   #invite { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-top: 6px; }

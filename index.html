@@ -74,6 +74,7 @@
         <h1 id="setup-title" class="screen-title" tabindex="-1"></h1>
         <p id="setup-description" class="screen-intro"></p>
         <form id="setup-form">
+          <p id="join-error" tabindex="-1" class="small-copy form-error"></p>
           <fieldset id="room-choice" hidden>
             <legend class="field-label">Room options</legend>
             <div class="difficulty-grid room-switch">
@@ -83,7 +84,7 @@
             <p id="room-hint" class="small-copy"></p>
             <div id="code-field" hidden>
               <label for="join-code" class="field-label">Room code</label>
-              <input class="name-input code-input" id="join-code" aria-describedby="join-error" placeholder="ABC23" maxlength="5" spellcheck="false" autocomplete="off" autocapitalize="characters">
+              <input class="name-input code-input" id="join-code" placeholder="ABC23" maxlength="5" spellcheck="false" autocomplete="off" autocapitalize="characters">
             </div>
           </fieldset>
           <div class="setup-grid">
@@ -106,7 +107,6 @@
             <button id="start-button" class="button primary" type="submit"><span id="start-label">Start battle</span> <i data-lucide="arrow-right"></i></button>
             <button id="resume-button" class="button" type="button">Resume match</button>
           </div>
-          <p id="join-error" role="status" class="small-copy form-error"></p>
         </form>
       </section>
 

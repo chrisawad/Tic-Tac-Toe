@@ -11,7 +11,7 @@ import {
   type Color, type Difficulty, type Match, type Mode, type Player, type PlayerIndex,
 } from './game';
 import { setupInstall } from './install';
-import { applyRoomMove, isRoomCode, openRoom, readyForRematch, type RoundAction } from './online';
+import { applyRoomMove, isRoomCode, offlineMessage, openRoom, readyForRematch, type RoundAction } from './online';
 import './style.css';
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -125,11 +125,22 @@ function profileFields(slot: 'one' | 'two', label: string, mark: 'X' | 'O', prof
 }
 
 let setupEvents = new AbortController();
+function clearRoomError() {
+  joinError.textContent = '';
+  joinCode.removeAttribute('aria-invalid');
+  joinCode.removeAttribute('aria-describedby');
+}
+
+function showRoomError(message: string) {
+  joinError.textContent = message;
+  joinError.focus();
+}
+
 function setRoomRole(joining: boolean) {
   form.querySelector<HTMLInputElement>(`[name="room-role"][value="${joining ? 'guest' : 'host'}"]`)!.checked = true;
   element('code-field').hidden = !joining;
   joinCode.disabled = !joining;
-  joinError.textContent = '';
+  clearRoomError();
   element('room-hint').textContent = joining
     ? 'Use the five-character code from your friend.'
     : 'Create a room to get a code, link, and QR invite to share.';
@@ -161,7 +172,7 @@ function openSetup(next: Mode, code = '') {
   else element('start-label').textContent = 'Start battle';
   element('resume-button').hidden = mode === 'online' || !savedMode(mode);
   joinCode.value = code;
-  joinError.textContent = '';
+  clearRoomError();
   showScreen('setup');
 }
 
@@ -374,7 +385,7 @@ async function showInvite(code: string) {
 
 function connect(profile: Player, code: string | null) {
   if (!navigator.onLine) {
-    joinError.textContent = 'Connect to the internet to play online.';
+    showRoomError(offlineMessage);
     return;
   }
   room?.close();
@@ -396,14 +407,15 @@ function connect(profile: Player, code: string | null) {
       action: action => receive(action, roomPlayer === 0 ? 1 : 0),
       failure: message => {
         room = undefined;
+        if (leaveDialog.open) leaveDialog.close('stay');
         goHome();
         openSetup('online', code ?? '');
-        joinError.textContent = message;
+        showRoomError(message);
       },
     });
   } catch {
     openSetup('online', code ?? '');
-    joinError.textContent = 'This browser couldn’t open an online room. Try a current version of Chrome, Edge, Firefox, or Safari.';
+    showRoomError('This browser couldn’t start online play. Open the game in an up-to-date browser and try again.');
   }
 }
 
@@ -474,7 +486,7 @@ form.addEventListener('change', event => {
   if (input.name === 'difficulty') setDifficulty(input.value as Difficulty);
   if (input.name === 'room-role') setRoomRole(input.value === 'guest');
 });
-joinCode.addEventListener('input', () => { joinError.textContent = ''; });
+joinCode.addEventListener('input', clearRoomError);
 form.addEventListener('submit', event => {
   event.preventDefault();
   const input = new FormData(form);
@@ -490,6 +502,8 @@ form.addEventListener('submit', event => {
     const code = joinCode.value.trim().toUpperCase();
     if (!isRoomCode(code)) {
       joinError.textContent = 'Enter the five-character code from your friend.';
+      joinCode.setAttribute('aria-invalid', 'true');
+      joinCode.setAttribute('aria-describedby', joinError.id);
       joinCode.focus();
       return;
     }

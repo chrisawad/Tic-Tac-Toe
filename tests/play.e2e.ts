@@ -282,11 +282,26 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
   await expect(page.getByRole('button', { name: 'Create a room' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Join room' }).click();
   await expect(page.locator('#join-error')).toContainText('five-character');
+  await expect(page.locator('#join-code')).toBeFocused();
+  await expect(page.locator('#join-code')).toHaveAttribute('aria-invalid', 'true');
   await page.getByText('Host a game', { exact: true }).click();
   await expect(page.locator('#join-error')).toBeEmpty();
+  await expect(page.locator('#join-code')).not.toHaveAttribute('aria-invalid');
   await visit(page, './?room=ABC23');
   await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
+});
+
+test('offline invite explains the network failure and preserves a valid code', async ({ page, context }) => {
+  await visit(page, './?room=ABC23');
+  await context.setOffline(true);
+  await page.getByRole('button', { name: 'Join room' }).click();
+  const error = page.locator('#join-error');
+  await expect(error).toContainText('offline');
+  await expect(error).toBeFocused();
+  await expect(error).toBeInViewport();
+  await expect(page.locator('#join-code')).toHaveValue('ABC23');
+  await expect(page.locator('#join-code')).not.toHaveAttribute('aria-invalid');
 });
 
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }, testInfo) => {
@@ -330,8 +345,10 @@ test('real online room carries a game and rematch between two browser contexts',
     await expect(page.locator('#round-counter')).toHaveText('Round 2');
     await expect(guest.locator('#score dd')).toHaveText(['1', '0', '0']);
     expect(await playerColors(guest)).toEqual(assigned);
+    await guest.getByRole('button', { name: 'All modes' }).click();
+    await guest.getByRole('button', { name: 'Leave room', exact: true }).click();
+    await expect(page.locator('#join-error')).toHaveText('Your opponent left the room.');
   } finally {
     await guest.close();
   }
-  await expect(page.locator('#join-error')).toHaveText('Your opponent left the room.', { timeout: 35000 });
 });

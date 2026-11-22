@@ -47,6 +47,37 @@ type Handlers = {
   failure: (message: string) => void;
 };
 
+export const offlineMessage = 'This device appears to be offline. Reconnect to the internet and try again.';
+const serviceFailure = 'This device couldn’t reach PeerJS, the room service. Check your internet connection and try again.';
+const serviceLost = 'This device lost its connection to the PeerJS room service. Check your internet connection and try again.';
+const lostOpponent = 'Lost contact with your opponent. Check that both devices are online, then create a new room.';
+
+function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal) {
+  const pc = connection.peerConnection;
+  let opened = false;
+  let gatheredRelay = false;
+  let relayIssue = '';
+  connection.on('open', () => { opened = true; });
+  pc.addEventListener('icecandidate', event => {
+    if (event.candidate?.type === 'relay') gatheredRelay = true;
+  }, { signal });
+  pc.addEventListener('icecandidateerror', event => {
+    if (!/^turns?:/i.test(event.url) || event.errorCode !== 701) return;
+    // 701 covers reachability. Only some browsers identify a DNS failure.
+    if (/host lookup|dns|name resolution/i.test(event.errorText)) {
+      relayIssue = 'This device couldn’t look up a backup relay’s address.';
+    } else if (!relayIssue) {
+      relayIssue = 'This device couldn’t reach a backup relay.';
+    }
+  }, { signal });
+  return () => {
+    if (opened) return 'The devices connected, but game setup didn’t finish. Reopen the game on both devices and create a new room.';
+    if (!host && !pc.remoteDescription) return 'No reply arrived from the host. Ask them to keep the room open and share their current code.';
+    if (relayIssue && !gatheredRelay) return `Room found. ${relayIssue} Try the same home Wi-Fi or switch networks, then create a new room.`;
+    return 'Room found, but the devices couldn’t establish a game connection. Try the same home Wi-Fi or switch networks, then create a new room.';
+  };
+}
+
 export function openRoom(profile: Player, code: string | null, handlers: Handlers) {
   const host = code === null;
   let peer: Peer;
@@ -58,6 +89,8 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
   let closed = false;
   let playing = false;
   let attempts = 0;
+  const listeners = new AbortController();
+  let joinFailure = () => serviceFailure;
 
   const cancelTimeout = () => window.clearTimeout(countdown);
   function depart() {
@@ -71,28 +104,30 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     cancelTimeout();
     window.clearTimeout(connectionLost);
     window.clearInterval(heartbeat);
-    window.removeEventListener('pagehide', depart);
+    listeners.abort();
     if (graceful && playing) window.setTimeout(() => peer.destroy(), 200);
     else peer.destroy();
   }
   function fail(message: string) {
     if (closed) return;
     close();
-    handlers.failure(message);
+    handlers.failure(navigator.onLine === false ? offlineMessage : message);
   }
-  function timeLimit(message: string) {
+  function failConnection() { fail(playing ? lostOpponent : joinFailure()); }
+  function timeLimit(reason: () => string) {
     cancelTimeout();
-    countdown = window.setTimeout(() => fail(message), 16_000);
+    countdown = window.setTimeout(() => fail(reason()), 16_000);
   }
 
   function useConnection(connection: DataConnection) {
     if (closed || channel) { connection.close(); return; }
     channel = connection;
-    timeLimit('The devices couldn’t connect. Try again on a different network.');
+    joinFailure = trackConnectionSetup(connection, host, listeners.signal);
+    timeLimit(joinFailure);
     connection.on('iceStateChanged', state => {
       window.clearTimeout(connectionLost);
       if (!closed && playing && state === 'disconnected') {
-        connectionLost = window.setTimeout(() => fail('Your opponent left the room.'), 5000);
+        connectionLost = window.setTimeout(() => fail(lostOpponent), 5000);
       }
     });
     connection.on('open', () => {
@@ -126,13 +161,13 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
       cancelTimeout();
       lastMessage = performance.now();
       heartbeat = window.setInterval(() => {
-        if (performance.now() - lastMessage > 25_000) fail('Your opponent left the room.');
+        if (performance.now() - lastMessage > 25_000) fail(lostOpponent);
         else transmit({ kind: 'ping' });
       }, 5_000);
       handlers.start(createMatch(players), host ? 0 : 1);
     });
-    connection.on('close', () => fail(playing ? 'Your opponent left the room.' : 'The room closed before the match could start.'));
-    connection.on('error', () => fail('The connection was interrupted.'));
+    connection.on('close', failConnection);
+    connection.on('error', failConnection);
   }
 
   function transmit(data: object) {
@@ -141,39 +176,51 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
       channel.send(data);
       return true;
     } catch {
-      fail('The connection was interrupted.');
+      failConnection();
       return false;
     }
   }
 
   function register(roomCode: string) {
     attempts++;
-    peer = new Peer(host ? prefix + roomCode : prefix + 'guest-' + crypto.randomUUID());
-    timeLimit('The room service is taking too long. Try again in a moment.');
-    peer.on('open', () => {
-      if (closed) return;
+    const registered = new Peer(host ? prefix + roomCode : prefix + 'guest-' + crypto.randomUUID());
+    peer = registered;
+    timeLimit(() => 'PeerJS didn’t confirm the connection to the room service in time. Check your internet connection and try again.');
+    registered.on('open', () => {
+      if (closed || registered !== peer) return;
       cancelTimeout();
       if (host) handlers.waiting(roomCode);
       else useConnection(peer.connect(prefix + roomCode, { reliable: true, serialization: 'json' }));
     });
-    if (host) peer.on('connection', useConnection);
-    peer.on('error', error => {
-      if (closed) return;
+    if (host) registered.on('connection', useConnection);
+    registered.on('error', error => {
+      if (closed || registered !== peer || (playing && channel?.open)) return;
       if (host && error.type === 'unavailable-id' && attempts < 4) {
-        peer.destroy();
         register(newCode());
+        registered.destroy();
       } else if (error.type === 'peer-unavailable') {
-        fail('Room not found. Check the code and make sure the host is still waiting.');
-      } else if (!playing || !channel?.open) {
-        fail('Online rooms are currently unavailable. Check your connection and try again.');
+        fail(host ? 'The joining player is no longer reachable. Create a new room and send them the invite.'
+          : `Room ${roomCode} couldn’t be found. Check the code and ask the host to keep their room open.`);
+      } else if (error.type === 'browser-incompatible') {
+        fail('This browser doesn’t support the connection used for online play. Open the game in an up-to-date browser.');
+      } else if (error.type === 'unavailable-id') {
+        fail('PeerJS couldn’t assign a unique room or player ID. Try again to get a new one.');
+      } else if (error.type === 'webrtc') {
+        fail('The browser reported a WebRTC error while setting up the connection. Reopen the game in an up-to-date browser and try again.');
+      } else if (error.type === 'invalid-key' || error.type === 'invalid-id') {
+        fail('PeerJS rejected the game’s room registration. Refresh the game and try again.');
+      } else if (error.type === 'server-error') {
+        fail('The PeerJS room service reported an error. Try again in a moment.');
+      } else {
+        fail(registered.open ? serviceLost : serviceFailure);
       }
     });
-    peer.on('disconnected', () => {
-      if (!playing || !channel?.open) fail('Disconnected from the room service. Try again.');
+    registered.on('disconnected', () => {
+      if (peer === registered && (!playing || !channel?.open)) fail(serviceLost);
     });
   }
 
   register(code ?? newCode());
-  window.addEventListener('pagehide', depart);
+  window.addEventListener('pagehide', depart, { signal: listeners.signal });
   return { close: () => close(true), send: (action: RoundAction) => transmit(action) };
 }
