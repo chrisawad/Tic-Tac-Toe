@@ -1,4 +1,5 @@
 import { Peer, util, type DataConnection } from 'peerjs';
+import { observeConnectionRoute, type ConnectionRoute } from './connection-route';
 import { createMatch, isPlayer, move, nextRound, palette, type Color, type Match, type Player, type PlayerIndex } from './game';
 
 const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -46,6 +47,7 @@ type RoomFailure = 'service' | 'host' | 'guest' | 'other-window';
 type Handlers = {
   waiting: (code: string, token: string) => void;
   connecting?: () => void;
+  route?: (route: ConnectionRoute) => void;
   start: (match: Match, index: PlayerIndex) => void;
   action: (action: RoundAction) => void;
   failure: (message: string, reason?: RoomFailure) => void;
@@ -192,11 +194,15 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
       playing = true;
       cancelTimeout();
       lastMessage = performance.now();
+      handlers.start(createMatch(players), host ? 0 : 1);
+      const refreshRoute = handlers.route && observeConnectionRoute(connection.peerConnection, listeners.signal, handlers.route);
       heartbeat = window.setInterval(() => {
         if (performance.now() - lastMessage > 25_000) fail(lostOpponent);
-        else transmit({ kind: 'ping' });
+        else {
+          transmit({ kind: 'ping' });
+          void refreshRoute?.();
+        }
       }, 5_000);
-      handlers.start(createMatch(players), host ? 0 : 1);
     });
     connection.on('close', failConnection);
     connection.on('error', failConnection);

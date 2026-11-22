@@ -132,6 +132,7 @@
       <section id="game" class="inner-screen game-screen" aria-labelledby="game-title" hidden>
         <div class="game-heading">
           <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> All modes</button>
+          <span id="connection-route" role="status" aria-label="Multiplayer connection" hidden></span>
           <span id="round-counter"></span>
         </div>
         <div class="game-layout">
@@ -176,6 +177,16 @@
       <form method="dialog" class="dialog-actions">
         <button class="button" autofocus>Not now</button>
         <button id="install-confirm" class="button primary" type="button" hidden><i data-lucide="download"></i> Install app</button>
+      </form>
+    </dialog>
+
+    <dialog id="update-dialog" aria-labelledby="update-title" aria-describedby="update-detail">
+      <span class="dialog-icon" aria-hidden="true"><i data-lucide="refresh-cw"></i></span>
+      <h2 id="update-title">Game update ready</h2>
+      <p id="update-detail">Update now to reload the game with the latest version. Reloading ends an online match in progress.</p>
+      <form method="dialog" class="dialog-actions">
+        <button class="button" autofocus>Not now</button>
+        <button id="update-confirm" class="button primary" type="button">Update now</button>
       </form>
     </dialog>
 

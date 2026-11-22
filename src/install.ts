@@ -1,4 +1,4 @@
-import { registerSW } from 'virtual:pwa-register';
+import { setupUpdates } from './update';
 
 type NativeInstall = Event & {
   prompt: () => Promise<unknown>;
@@ -16,7 +16,7 @@ export function setupInstall(
   dialog: HTMLDialogElement,
   update: HTMLButtonElement,
   notify: (message: string) => void,
-  { offerOnLaunch }: { offerOnLaunch: boolean },
+  { offerOnLaunch, beforeUpdateReload }: { offerOnLaunch: boolean; beforeUpdateReload: () => void },
 ) {
   const nav = navigator as InstallNavigator;
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
@@ -52,7 +52,7 @@ export function setupInstall(
     confirm.hidden = !canInstall();
     steps.hidden = canInstall();
     if (standalone && dialog.open) dialog.close();
-    else if (offerOnLaunch && checked && !standalone && !offered) offer();
+    else if (offerOnLaunch && update.hidden && checked && !standalone && !offered) offer();
   }
   async function checkRelated() {
     if (!isSecureContext || !nav.getInstalledRelatedApps) return;
@@ -127,8 +127,7 @@ export function setupInstall(
   help.addEventListener('click', offer);
   displayChanged();
   void checkRelated().then(() => { checked = true; reflect(); });
-  const updateSW = registerSW({ onNeedRefresh() { update.hidden = false; } });
-  update.addEventListener('click', () => void updateSW(true));
+  setupUpdates(update, dialog, beforeUpdateReload);
 }
 
 function installSteps() {

@@ -404,20 +404,24 @@ test('an older saved room with an occupied code offers a new invite immediately'
   await expect(page.locator('#room-code')).not.toHaveText('ABC23');
 });
 
-test('two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
+const testRelay = process.env.TEST_TURN_URL;
+test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
   test.setTimeout(65_000);
   const secondBrowser = await playwright.chromium.launch();
   try {
     const guest = await secondBrowser.newPage({ isMobile });
     for (const playerPage of [page, guest]) {
-      await playerPage.addInitScript(() => {
+      const config: RTCConfiguration = testRelay
+        ? { iceTransportPolicy: 'relay', iceServers: [{ urls: testRelay, username: process.env.TEST_TURN_USER, credential: process.env.TEST_TURN_PASSWORD }] }
+        : { iceServers: [{ urls: 'turn:relay.invalid:3478', username: 'test', credential: 'test' }] };
+      await playerPage.addInitScript(overrides => {
         window.RTCPeerConnection = class extends RTCPeerConnection {
           constructor(config?: RTCConfiguration) {
-            super({ ...config, iceServers: [{ urls: 'turn:relay.invalid:3478', username: 'test', credential: 'test' }] });
+            super({ ...config, ...overrides });
           }
         };
-      });
+      }, config);
     }
     await visit(page);
     await mode(page, 'online').click();
@@ -426,6 +430,15 @@ test('two browsers can play directly with an unresolvable relay and no STUN serv
     await guest.goto(await page.locator('#invite-link').inputValue());
     await guest.getByRole('button', { name: 'Join room' }).click();
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
+    for (const device of [page, guest]) {
+      await expect(device.locator('#connection-route')).toHaveText(testRelay ? 'Via relay' : 'Direct');
+      await expect(device.locator('#connection-route')).toBeInViewport({ ratio: 1 });
+    }
+    if (isMobile) {
+      await page.setViewportSize({ width: 568, height: 320 });
+      await expect(page.locator('#connection-route')).toBeInViewport({ ratio: 1 });
+      await expect(page.locator('#board')).toBeInViewport({ ratio: 1 });
+    }
     await square(page, 4).click();
     await expect(guest.locator('#turn-status')).toHaveText('Your turn · O');
   } finally {

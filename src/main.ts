@@ -44,6 +44,7 @@ const form = element<HTMLFormElement>('setup-form');
 const joinCode = element<HTMLInputElement>('join-code');
 const joinError = element('join-error');
 const resultDialog = element<HTMLDialogElement>('result-dialog');
+const connectionRoute = element('connection-route');
 const leaveDialog = element<HTMLDialogElement>('leave-dialog');
 const boardElement = element('board');
 const strike = element('strike');
@@ -210,6 +211,8 @@ function requestHome() {
 }
 
 function startGame(newMatch: Match) {
+  connectionRoute.hidden = mode !== 'online';
+  connectionRoute.textContent = '';
   match = newMatch;
   ready = [false, false];
   element('game-mode').textContent = mode === 'ai' ? `AI Battle · ${difficulty}` : modeInfo[mode][0];
@@ -438,6 +441,9 @@ function connect(profile: Player, code: string | null) {
         void showInvite(nextCode);
       },
       connecting: () => { element('room-status').textContent = 'Room found. Still connecting the devices… Keep both games on screen.'; },
+      route: route => {
+        connectionRoute.textContent = { direct: 'Direct', relay: 'Via relay', unknown: 'Route unknown' }[route];
+      },
       start: (newMatch, index) => {
         clearLobby();
         roomPlayer = index;
@@ -632,5 +638,14 @@ if (fromInvite) {
 }
 setupInstall(
   element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
-  notify, { offerOnLaunch: !fromInvite && !hostLobby },
+  notify, {
+    offerOnLaunch: !fromInvite && !hostLobby,
+    beforeUpdateReload: () => {
+      const code = joinCode.value.trim().toUpperCase();
+      if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;
+      const target = new URL(location.href);
+      target.searchParams.set('room', code);
+      history.replaceState(null, '', target);
+    },
+  },
 );
