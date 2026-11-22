@@ -40,16 +40,18 @@ export function readyForRematch(match: Match, ready: [boolean, boolean], actor: 
   return ready.every(Boolean) ? next : match;
 }
 
+type RoomRetry = 'service' | 'host' | 'busy' | 'guest';
+
 type Handlers = {
   waiting: (code: string) => void;
   start: (match: Match, index: PlayerIndex) => void;
   action: (action: RoundAction) => void;
-  failure: (message: string) => void;
+  failure: (message: string, retry?: RoomRetry) => void;
 };
 
 export const offlineMessage = 'This device appears to be offline. Reconnect to the internet and try again.';
-const serviceFailure = 'This device couldn’t reach PeerJS, the room service. Check your internet connection and try again.';
-const serviceLost = 'This device lost its connection to the PeerJS room service. Check your internet connection and try again.';
+const serviceFailure = 'This device couldn’t reach the room service. Check your internet connection and try again.';
+const serviceLost = 'This device lost its connection to the room service. Check your internet connection and try again.';
 const lostOpponent = 'Lost contact with your opponent. Check that both devices are online, then create a new room.';
 
 function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal) {
@@ -71,14 +73,14 @@ function trackConnectionSetup(connection: DataConnection, host: boolean, signal:
     }
   }, { signal });
   return () => {
-    if (opened) return 'The devices connected, but game setup didn’t finish. Reopen the game on both devices and create a new room.';
+    if (opened) return 'The devices connected, but game setup didn’t finish. Return to the game on both devices and try joining again.';
     if (!host && !pc.remoteDescription) return 'No reply arrived from the host. Ask them to keep the room open and share their current code.';
-    if (relayIssue && !gatheredRelay) return `Room found. ${relayIssue} Try the same home Wi-Fi or switch networks, then create a new room.`;
-    return 'Room found, but the devices couldn’t establish a game connection. Try the same home Wi-Fi or switch networks, then create a new room.';
+    if (relayIssue && !gatheredRelay) return `Room found. ${relayIssue} Try the same home Wi-Fi or switch networks, then try joining again.`;
+    return 'Room found, but the devices couldn’t establish a game connection. Try the same home Wi-Fi or switch networks, then try joining again.';
   };
 }
 
-export function openRoom(profile: Player, code: string | null, handlers: Handlers) {
+export function openRoom(profile: Player, code: string | null, handlers: Handlers, restoreHostCode?: string) {
   const host = code === null;
   let peer: Peer;
   let channel: DataConnection | undefined;
@@ -108,22 +110,26 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     if (graceful && playing) window.setTimeout(() => peer.destroy(), 200);
     else peer.destroy();
   }
-  function fail(message: string) {
+  function fail(message: string, retry?: RoomRetry) {
     if (closed) return;
     close();
-    handlers.failure(navigator.onLine === false ? offlineMessage : message);
+    handlers.failure(navigator.onLine === false ? offlineMessage : message, retry);
   }
-  function failConnection() { fail(playing ? lostOpponent : joinFailure()); }
-  function timeLimit(reason: () => string) {
+  function failConnection() {
+    if (playing) fail(lostOpponent);
+    else if (host) fail(joinFailure(), 'guest');
+    else fail(joinFailure(), !channel?.peerConnection?.remoteDescription || channel.open ? 'host' : undefined);
+  }
+  function timeLimit(onTimeout: () => void) {
     cancelTimeout();
-    countdown = window.setTimeout(() => fail(reason()), 16_000);
+    countdown = window.setTimeout(onTimeout, 16_000);
   }
 
   function useConnection(connection: DataConnection) {
     if (closed || channel) { connection.close(); return; }
     channel = connection;
     joinFailure = trackConnectionSetup(connection, host, listeners.signal);
-    timeLimit(joinFailure);
+    timeLimit(failConnection);
     connection.on('iceStateChanged', state => {
       window.clearTimeout(connectionLost);
       if (!closed && playing && state === 'disconnected') {
@@ -185,7 +191,7 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     attempts++;
     const registered = new Peer(host ? prefix + roomCode : prefix + 'guest-' + crypto.randomUUID());
     peer = registered;
-    timeLimit(() => 'PeerJS didn’t confirm the connection to the room service in time. Check your internet connection and try again.');
+    timeLimit(() => fail('The room service didn’t respond in time. Check your internet connection and try again.', 'service'));
     registered.on('open', () => {
       if (closed || registered !== peer) return;
       cancelTimeout();
@@ -195,32 +201,35 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     if (host) registered.on('connection', useConnection);
     registered.on('error', error => {
       if (closed || registered !== peer || (playing && channel?.open)) return;
-      if (host && error.type === 'unavailable-id' && attempts < 4) {
+      if (host && !restoreHostCode && error.type === 'unavailable-id' && attempts < 4) {
         register(newCode());
         registered.destroy();
       } else if (error.type === 'peer-unavailable') {
-        fail(host ? 'The joining player is no longer reachable. Create a new room and send them the invite.'
-          : `Room ${roomCode} couldn’t be found. Check the code and ask the host to keep their room open.`);
+        fail(host ? 'The joining player disconnected. Ask them to open the same invite again.'
+          : `Room ${roomCode} couldn’t be found. Check the code and ask the host to return to the game, then tap Join room again.`, host ? 'guest' : 'host');
       } else if (error.type === 'browser-incompatible') {
         fail('This browser doesn’t support the connection used for online play. Open the game in an up-to-date browser.');
       } else if (error.type === 'unavailable-id') {
-        fail('PeerJS couldn’t assign a unique room or player ID. Try again to get a new one.');
+        if (restoreHostCode) fail(`Room ${roomCode} is already in use. Return to the original game window or create a new room.`, 'busy');
+        else fail('The room service couldn’t assign a unique ID. Try again to get a new one.');
       } else if (error.type === 'webrtc') {
-        fail('The browser reported a WebRTC error while setting up the connection. Reopen the game in an up-to-date browser and try again.');
+        fail('The browser reported a WebRTC error while setting up the connection. Reopen the game in an up-to-date browser and try again.',
+          host && channel ? 'guest' : undefined);
       } else if (error.type === 'invalid-key' || error.type === 'invalid-id') {
-        fail('PeerJS rejected the game’s room registration. Refresh the game and try again.');
+        fail('The room service rejected the registration. Refresh the game and try again.');
       } else if (error.type === 'server-error') {
-        fail('The PeerJS room service reported an error. Try again in a moment.');
+        fail('The room service reported an error. Try again in a moment.', 'service');
       } else {
-        fail(registered.open ? serviceLost : serviceFailure);
+        fail(registered.open ? serviceLost : serviceFailure, 'service');
       }
     });
     registered.on('disconnected', () => {
-      if (peer === registered && (!playing || !channel?.open)) fail(serviceLost);
+      if (peer === registered && (!playing || !channel?.open)) fail(serviceLost, 'service');
     });
   }
 
-  register(code ?? newCode());
-  window.addEventListener('pagehide', depart, { signal: listeners.signal });
+  register(code ?? restoreHostCode ?? newCode());
+  // A cached page can resume in the same match. Only an actual departure sends leave.
+  window.addEventListener('pagehide', event => { if (!event.persisted) depart(); }, { signal: listeners.signal });
   return { close: () => close(true), send: (action: RoundAction) => transmit(action) };
 }

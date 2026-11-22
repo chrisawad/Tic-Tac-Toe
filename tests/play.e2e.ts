@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 
 const square = (page: Page, index: number) => page.getByRole('button', { name: new RegExp('^Square ' + (index + 1) + ',') });
 const name = (page: Page, slot: 'one' | 'two') => page.locator('#name-' + slot);
@@ -314,8 +314,52 @@ test('offline invite explains the network failure and preserves a valid code', a
   await expect(page.locator('#join-code')).not.toHaveAttribute('aria-invalid');
 });
 
-test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }, testInfo) => {
-  test.skip(!process.env.LIVE_ROOM_TEST || testInfo.project.name !== 'desktop', 'Live PeerJS room smoke test');
+test('a shared waiting room survives suspension and relaunch and clears on exit', async ({ page, context, isMobile }) => {
+  const registrations: string[] = [];
+  let signaling: WebSocketRoute;
+  await context.routeWebSocket(/\/peerjs\?/, socket => {
+    signaling = socket;
+    registrations.push(new URL(socket.url()).searchParams.get('id')!);
+    socket.send(JSON.stringify({ type: 'OPEN' }));
+  });
+  await context.addInitScript(standalone => {
+    if (standalone) Object.defineProperty(navigator, 'standalone', { value: true });
+    Object.defineProperty(navigator, 'share', { value: (data: ShareData) => {
+      document.documentElement.dataset.shared = data.url;
+      return new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }));
+    } });
+  }, isMobile);
+  await page.goto('./');
+  if (!isMobile) await dismissInstall(page);
+  await mode(page, 'online').click();
+  await page.getByRole('button', { name: 'Create a room' }).click();
+  await expect(page.locator('#room-qr')).toBeVisible();
+  const invite = await page.locator('#invite-link').inputValue();
+  await page.locator('#share-room').click();
+  await expect(page.locator('html')).toHaveAttribute('data-shared', invite);
+  await signaling!.close({ code: 1001, reason: 'Connection interrupted' });
+  await expect.poll(() => registrations.length).toBe(2);
+  await expect(page.locator('#room-status')).toContainText('Waiting for a friend');
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await expect.poll(() => registrations.length).toBe(3);
+  await expect(page.locator('#room-status')).toContainText('Waiting for a friend');
+  const restored = isMobile ? await context.newPage() : page;
+  if (isMobile) await page.close();
+  await restored.goto('./');
+  await expect(restored.locator('#room-status')).toContainText('Waiting for a friend');
+  await expect(restored.locator('#invite-link')).toHaveValue(invite);
+  await expect(restored.locator('#install-dialog')).toBeHidden();
+  expect(registrations).toEqual(Array(4).fill('chrisawad-tic-tac-toe-v1-' + new URL(invite).searchParams.get('room')));
+  await restored.locator('#room-back').click();
+  await restored.reload();
+  await expect(restored.locator('#home')).toBeVisible();
+});
+
+test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }) => {
+  test.skip(!process.env.LIVE_ROOM_TEST, 'Live online room smoke test');
   test.setTimeout(85_000);
   await visit(page);
   await mode(page, 'online').click();
@@ -325,15 +369,25 @@ test('real online room carries a game and rematch between two browser contexts',
   await expect(code).toHaveText(/^[A-Z2-9]{5}$/, { timeout: 24000 });
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
-  expect(invite).toBe(new URL('?room=' + await code.textContent(), baseURL).href);
+  const sharedCode = (await code.textContent())!;
+  expect(invite).toBe(new URL('?room=' + sharedCode, baseURL).href);
+  const hostTab = await page.context().newCDPSession(page);
+  await page.context().setOffline(true);
+  await expect(page.locator('#room-status')).toContainText('back online');
+  await hostTab.send('Page.setWebLifecycleState', { state: 'frozen' });
   const guest = await browser.newPage();
   try {
     await guest.goto(invite);
     await expect(guest.locator('#install-dialog')).toBeHidden();
-    await expect(guest.locator('#join-code')).toHaveValue((await code.textContent())!);
+    await expect(guest.locator('#join-code')).toHaveValue(sharedCode);
     await name(guest, 'one').fill('Guest');
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });
     await guest.getByRole('button', { name: 'Join room' }).click();
+    await expect(guest.locator('#room-status')).toContainText('Waiting for room', { timeout: 24000 });
+    await hostTab.send('Page.setWebLifecycleState', { state: 'active' });
+    await page.context().setOffline(false);
+    await page.reload();
+    await expect(page.locator('#invite-link')).toHaveValue(invite);
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 24000 });
     await expect(guest.locator('#turn-status')).toHaveText('Host’s turn · X');
     const playerColors = (p: Page) => p.locator('.player-card').evaluateAll(cards =>

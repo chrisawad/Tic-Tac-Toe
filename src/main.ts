@@ -11,6 +11,7 @@ import {
   type Color, type Difficulty, type Match, type Mode, type Player, type PlayerIndex,
 } from './game';
 import { setupInstall } from './install';
+import { forgetHostLobby, readHostLobby, rememberHostLobby, type HostLobby } from './host-lobby';
 import { applyRoomMove, isRoomCode, offlineMessage, openRoom, readyForRematch, type RoundAction } from './online';
 import './style.css';
 
@@ -62,6 +63,11 @@ let room: ReturnType<typeof openRoom> | undefined;
 let roomPlayer: PlayerIndex = 0;
 let ready: [boolean, boolean] = [false, false];
 let inviteUrl = '';
+let hostLobby: HostLobby | null = null;
+let retryTimer: number | undefined;
+let hostRetries = 0;
+let hostJoinIssue = '';
+let guestRetryUntil = 0;
 
 function notify(message: string) {
   element('notice').textContent = message;
@@ -187,6 +193,7 @@ function profileFrom(formData: FormData, slot: 'one' | 'two', fallback: Player) 
 }
 
 function goHome() {
+  clearLobby();
   window.clearTimeout(aiTimer);
   window.clearTimeout(resultTimer);
   celebration.stop();
@@ -198,7 +205,7 @@ function goHome() {
 }
 
 function requestHome() {
-  if (room) leaveDialog.showModal();
+  if (screen === 'room' || room) leaveDialog.showModal();
   else goHome();
 }
 
@@ -369,7 +376,7 @@ async function showInvite(code: string) {
   url.searchParams.set('room', code);
   inviteUrl = url.href;
   element('room-code').textContent = code;
-  element('room-status').textContent = 'Waiting for a friend to join…';
+  element('room-status').textContent = hostJoinIssue || 'Waiting for a friend to join…';
   element('invite').hidden = false;
   element('share-room').hidden = !navigator.share;
   element<HTMLInputElement>('invite-link').value = inviteUrl;
@@ -383,21 +390,55 @@ async function showInvite(code: string) {
   } catch { /* Copy and share are available independently of the QR. */ }
 }
 
+function clearLobby() {
+  window.clearTimeout(retryTimer);
+  if (hostLobby) forgetHostLobby(hostLobby);
+  hostLobby = null;
+  hostRetries = 0;
+  hostJoinIssue = '';
+  guestRetryUntil = 0;
+  inviteUrl = '';
+}
+
+function resumeHost() {
+  if (!hostLobby || room || document.hidden) return;
+  element('room-status').textContent = navigator.onLine
+    ? `Reopening room ${hostLobby.code}…` : `Room ${hostLobby.code} will reopen when you’re back online.`;
+  if (navigator.onLine) connect(hostLobby.profile, null);
+}
+
+function suspendHost() {
+  if (!hostLobby) return;
+  rememberHostLobby(hostLobby);
+  window.clearTimeout(retryTimer);
+  room?.close();
+  room = undefined;
+}
+
 function connect(profile: Player, code: string | null) {
+  window.clearTimeout(retryTimer);
   if (!navigator.onLine) {
+    openSetup('online', code ?? '');
     showRoomError(offlineMessage);
     return;
   }
   room?.close();
-  inviteUrl = '';
-  element('invite-link').hidden = true;
-  element('invite').hidden = true;
-  element('room-status').textContent = code ? `Joining room ${code}…` : 'Creating your room…';
+  if (!hostLobby) {
+    element('invite-link').hidden = true;
+    element('invite').hidden = true;
+    element('room-status').textContent = code ? `Joining room ${code}…` : 'Creating your room…';
+  }
   showScreen('room');
   try {
     room = openRoom(profile, code, {
-      waiting: nextCode => void showInvite(nextCode),
+      waiting: nextCode => {
+        hostRetries = 0;
+        hostLobby = { code: nextCode, profile };
+        rememberHostLobby(hostLobby);
+        void showInvite(nextCode);
+      },
       start: (newMatch, index) => {
+        clearLobby();
         roomPlayer = index;
         startGame(newMatch);
         if (index === 1 && newMatch.players[1].color !== profile.color) {
@@ -405,15 +446,33 @@ function connect(profile: Player, code: string | null) {
         }
       },
       action: action => receive(action, roomPlayer === 0 ? 1 : 0),
-      failure: message => {
+      failure: (message, retry) => {
         room = undefined;
+        if (hostLobby && (retry === 'service' || retry === 'guest' || (retry === 'busy' && hostRetries < 8))) {
+          if (retry === 'guest') hostJoinIssue = message;
+          const status = element('room-status');
+          if (!navigator.onLine) status.textContent = `Room ${hostLobby.code} will reopen when you’re back online.`;
+          else if (retry === 'busy') status.textContent = `Waiting for the previous connection to release room ${hostLobby.code}…`;
+          else status.textContent = `${message} Reopening room ${hostLobby.code}…`;
+          if (!document.hidden && navigator.onLine) {
+            retryTimer = window.setTimeout(resumeHost, Math.min(1000 * 2 ** hostRetries, 15_000));
+            hostRetries++;
+          }
+          return;
+        }
+        if (code && retry === 'host' && navigator.onLine && Date.now() < guestRetryUntil) {
+          element('room-status').textContent = `Waiting for room ${code}. Your host may still be sharing the invite…`;
+          retryTimer = window.setTimeout(() => connect(profile, code), 2500);
+          return;
+        }
         if (leaveDialog.open) leaveDialog.close('stay');
         goHome();
         openSetup('online', code ?? '');
         showRoomError(message);
       },
-    });
+    }, hostLobby?.code);
   } catch {
+    clearLobby();
     openSetup('online', code ?? '');
     showRoomError('This browser couldn’t start online play. Open the game in an up-to-date browser and try again.');
   }
@@ -458,14 +517,18 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-dialog]
   button.addEventListener('click', () => element<HTMLDialogElement>(button.dataset.dialog + '-dialog').showModal());
 }
 element('room-back').addEventListener('click', () => {
+  clearLobby();
   room?.close();
   room = undefined;
   showScreen('setup');
 });
 element('copy-room').addEventListener('click', () => void copyInvite());
 element('share-room').addEventListener('click', async () => {
-  try { await navigator.share({ title: 'Play Tic Tac Toe', text: 'Join my Tic Tac Toe room.', url: inviteUrl }); }
-  catch (error) { if (!(error instanceof DOMException) || error.name !== 'AbortError') void copyInvite(); }
+  const url = inviteUrl;
+  try { await navigator.share({ title: 'Play Tic Tac Toe', text: 'Join my Tic Tac Toe room.', url }); }
+  catch (error) {
+    if (inviteUrl === url && !(error instanceof DOMException && error.name === 'AbortError')) void copyInvite();
+  }
 });
 element('sound-button').addEventListener('click', () => {
   audioEnabled = !audioEnabled;
@@ -507,6 +570,7 @@ form.addEventListener('submit', event => {
       joinCode.focus();
       return;
     }
+    guestRetryUntil = Date.now() + 25_000;
     connect(first, code);
     return;
   }
@@ -541,6 +605,16 @@ createIcons({
   attrs: { 'aria-hidden': 'true' },
 });
 updateSound();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && hostLobby) rememberHostLobby(hostLobby);
+  else resumeHost();
+});
+document.addEventListener('freeze', suspendHost);
+document.addEventListener('resume', resumeHost);
+window.addEventListener('pagehide', suspendHost);
+window.addEventListener('pageshow', resumeHost);
+window.addEventListener('online', resumeHost);
+window.addEventListener('offline', () => { suspendHost(); resumeHost(); });
 const url = new URL(location.href);
 const invited = url.searchParams.get('room')?.toUpperCase() ?? '';
 const fromInvite = isRoomCode(invited);
@@ -548,8 +622,13 @@ if (fromInvite) {
   openSetup('online', invited);
   url.searchParams.delete('room');
   history.replaceState(null, '', url);
+} else if ((hostLobby = readHostLobby())) {
+  openSetup('online');
+  showScreen('room');
+  void showInvite(hostLobby.code);
+  resumeHost();
 }
 setupInstall(
   element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
-  notify, { offerOnLaunch: !fromInvite },
+  notify, { offerOnLaunch: !fromInvite && !hostLobby },
 );
