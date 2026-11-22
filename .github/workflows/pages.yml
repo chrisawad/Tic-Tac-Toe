@@ -36,6 +36,7 @@ jobs:
       - run: pnpm build
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+          VITE_TURN_WORKER_URL: ${{ vars.TURN_WORKER_URL }}
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
         env:

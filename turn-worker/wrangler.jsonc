@@ -1,0 +1,16 @@
+{
+  "name": "tic-tac-toe-turn",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-21",
+  "workers_dev": true,
+  "vars": {
+    "GAME_ORIGIN": "https://chrisawad.github.io"
+  },
+  "ratelimits": [
+    {
+      "name": "CREDENTIAL_REQUESTS",
+      "namespace_id": "72461",
+      "simple": { "limit": 12, "period": 60 }
+    }
+  ]
+}

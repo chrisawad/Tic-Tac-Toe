@@ -27,7 +27,20 @@ describe('room failure messages', () => {
     vi.stubGlobal('window', Object.assign(new EventTarget(), { setTimeout, clearTimeout, setInterval, clearInterval }));
     vi.stubGlobal('navigator', { onLine: true });
   });
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+  it('can still start a direct connection when relay credential issuance fails', async () => {
+    vi.stubEnv('VITE_TURN_WORKER_URL', 'https://worker.example/');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+    const { peer, rtc, channel, failure } = attempt(false);
+    await vi.waitFor(() => expect(peer.listenerCount('open')).toBe(1));
+    peer.emit('open');
+    const options = createPeer.mock.lastCall![1];
+    expect(options.config.iceServers).toEqual([{ urls: expect.arrayContaining(['stun:stun.cloudflare.com:3478']) }]);
+    rtc.remoteDescription = { type: 'answer' };
+    channel.emit('close');
+    expect(failure).toHaveBeenCalledWith(expect.stringContaining('temporary access to the backup relay'), undefined);
+  });
 
   it.each([
     ['turn:relay.example', 'TURN host lookup received error.', false, 'look up a backup relay'],

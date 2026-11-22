@@ -1,0 +1,11 @@
+{
+  "name": "tic-tac-toe-turn",
+  "private": true,
+  "type": "module",
+  "cloudflare": {
+    "bindings": {
+      "TURN_KEY_ID": { "description": "Enter the TURN Token ID from Cloudflare Realtime." },
+      "TURN_API_TOKEN": { "description": "Enter the API key issued alongside that TURN Token ID." }
+    }
+  }
+}

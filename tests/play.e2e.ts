@@ -411,10 +411,21 @@ test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers c
   const secondBrowser = await playwright.chromium.launch();
   try {
     const guest = await secondBrowser.newPage({ isMobile });
+    const testWorker = testRelay && process.env.TEST_TURN_WORKER_URL;
+    let credentialRequests = 0;
     for (const playerPage of [page, guest]) {
-      const config: RTCConfiguration = testRelay
-        ? { iceTransportPolicy: 'relay', iceServers: [{ urls: testRelay, username: process.env.TEST_TURN_USER, credential: process.env.TEST_TURN_PASSWORD }] }
-        : { iceServers: [{ urls: 'turn:relay.invalid:3478', username: 'test', credential: 'test' }] };
+      const servers = [{ urls: testRelay || 'turn:relay.invalid:3478', username: process.env.TEST_TURN_USER || 'test', credential: process.env.TEST_TURN_PASSWORD || 'test' }];
+      const config: RTCConfiguration = {};
+      if (testRelay) config.iceTransportPolicy = 'relay';
+      if (testWorker) {
+        await playerPage.route(testWorker, route => {
+          expect(route.request().method()).toBe('POST');
+          credentialRequests++;
+          return route.fulfill({ json: { iceServers: servers }, headers: { 'Access-Control-Allow-Origin': '*' } });
+        });
+      } else {
+        config.iceServers = servers;
+      }
       await playerPage.addInitScript(overrides => {
         window.RTCPeerConnection = class extends RTCPeerConnection {
           constructor(config?: RTCConfiguration) {
@@ -434,6 +445,7 @@ test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers c
       await expect(device.locator('#connection-route')).toHaveText(testRelay ? 'Via relay' : 'Direct');
       await expect(device.locator('#connection-route')).toBeInViewport({ ratio: 1 });
     }
+    if (testWorker) expect(credentialRequests).toBe(2);
     if (isMobile) {
       await page.setViewportSize({ width: 568, height: 320 });
       await expect(page.locator('#connection-route')).toBeInViewport({ ratio: 1 });

@@ -58,12 +58,34 @@ const serviceFailure = 'This device couldn’t reach the room service. Check you
 const serviceLost = 'This device lost its connection to the room service. Check your internet connection and try again.';
 const lostOpponent = 'Lost contact with your opponent. Check that both devices are online, then create a new room.';
 const wifiHelp = 'On shared Wi-Fi, check whether the router isolates devices, especially on a guest network.';
-const rtcConfig: RTCConfiguration = {
+const defaultRtcConfig: RTCConfiguration = {
   ...util.defaultConfig,
   iceServers: [...util.defaultConfig.iceServers, { urls: 'stun:stun.cloudflare.com:3478' }],
 };
 
-function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal) {
+const directServers: RTCIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+
+async function fetchRelayServers(endpoint: string, signal: AbortSignal): Promise<RTCIceServer[]> {
+  const response = await fetch(endpoint, {
+    method: 'POST', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
+    signal: AbortSignal.any([signal, AbortSignal.timeout(4_000)]),
+  });
+  if (!response.ok) throw new Error('Relay credential request failed.');
+  const { iceServers } = await response.json();
+  const servers: RTCIceServer[] = [];
+  if (Array.isArray(iceServers)) {
+    for (const server of iceServers) {
+      if (!server || typeof server.username !== 'string' || typeof server.credential !== 'string') continue;
+      const urls = [server.urls].flat().filter((url): url is string =>
+        typeof url === 'string' && /^turns?:[\w.-]+:\d+(\?transport=(udp|tcp))?$/i.test(url) && !/:53(?:\?|$)/.test(url));
+      if (urls.length) servers.push({ urls, username: server.username, credential: server.credential });
+    }
+  }
+  if (!servers.length) throw new Error('No usable relay servers.');
+  return servers;
+}
+
+function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal, relayUnavailable: boolean) {
   const pc = connection.peerConnection;
   let opened = false;
   let networkConnected = false;
@@ -92,6 +114,7 @@ function trackConnectionSetup(connection: DataConnection, host: boolean, signal:
       return 'Room found. The devices reached each other, but the game channel didn’t open. Keep both games on screen and try joining again.';
     }
     if (relayIssue && !gatheredRelay) return `Room found, but no direct connection opened. ${relayIssue} ${wifiHelp}`;
+    if (relayUnavailable) return 'Room found, but no direct connection opened. This device couldn’t get temporary access to the backup relay. Try joining again in a minute.';
     return `Room found, but the devices couldn’t establish a game connection. ${wifiHelp}`;
   };
 }
@@ -110,6 +133,8 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
   let playing = false;
   let attempts = 0;
   const listeners = new AbortController();
+  let rtcConfig = defaultRtcConfig;
+  let relayUnavailable = false;
   let joinFailure = () => serviceFailure;
 
   const cancelTimeout = () => window.clearTimeout(countdown);
@@ -147,7 +172,7 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
   function useConnection(connection: DataConnection) {
     if (closed || channel) { connection.close(); return; }
     channel = connection;
-    joinFailure = trackConnectionSetup(connection, host, listeners.signal);
+    joinFailure = trackConnectionSetup(connection, host, listeners.signal, relayUnavailable);
     timeLimit(() => {
       const pc = connection.peerConnection;
       // A relay lookup can fail while ICE is still checking a usable direct route.
@@ -263,6 +288,20 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
   }
 
   const roomCode = code ?? restored?.code ?? newCode();
+  async function prepareRoom() {
+    cancelTimeout();
+    const endpoint = import.meta.env.VITE_TURN_WORKER_URL;
+    if (endpoint) {
+      let servers = directServers;
+      try { servers = [...directServers, ...await fetchRelayServers(endpoint, listeners.signal)]; }
+      catch { relayUnavailable = true; }
+      rtcConfig = { ...defaultRtcConfig, iceServers: servers };
+    }
+    if (!closed) {
+      try { register(roomCode); }
+      catch { fail('The browser couldn’t start the game connection. Refresh the game and try again.'); }
+    }
+  }
   if (hostToken && navigator.locks) {
     const held = new Promise<void>(resolve => { releaseHostLock = resolve; });
     // A page can resume before the browser finishes releasing its previous lock.
@@ -271,11 +310,11 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     }, 1000);
     void navigator.locks.request(prefix + hostToken, { signal: listeners.signal }, () => {
       if (closed) return;
-      register(roomCode);
+      void prepareRoom();
       return held;
     }).catch(() => fail('This browser couldn’t open the room. Reopen the game and try again.'));
   } else {
-    register(roomCode);
+    void prepareRoom();
   }
   // A cached page can resume in the same match. Only an actual departure sends leave.
   window.addEventListener('pagehide', event => { if (!event.persisted) depart(); }, { signal: listeners.signal });
