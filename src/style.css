@@ -406,6 +406,8 @@ dialog form { margin-top: 23px; }
 .dialog-actions > button { flex: 1; }
 .result-dialog { text-align: center; }
 .result-content { position: relative; z-index: 1; }
+.result-content [data-share-game] { position: absolute; inset-block-start: 0; inset-inline-end: 0; }
+#share-game-dialog label { display: block; margin-top: 16px; }
 .trophy {
   display: grid;
   place-items: center;
@@ -521,6 +523,7 @@ dialog form { margin-top: 23px; }
 }
 
 @media (max-width: 370px) {
+  .topbar-inner:has(.install-button:not([hidden])) .brand > :last-child { display: none; }
   .shell { width: calc(100% - 26px); }
   .toolbar { gap: 5px; }
   .install-button svg { display: none; }
@@ -602,7 +605,8 @@ dialog form { margin-top: 23px; }
     padding-right: max(14px, env(safe-area-inset-right), (100vw - 1080px) / 2);
   }
   body:has(.game-screen:not([hidden])) .topbar { grid-area: toolbar; background: transparent; }
-  body:has(.game-screen:not([hidden])) .topbar-inner { padding-block: 0; }
+  body:has(.game-screen:not([hidden])) .topbar-inner { padding-block: 0; gap: 4px; }
+  body:has(.game-screen:not([hidden])) .toolbar { gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
   body:has(.game-screen:not([hidden])) .toolbar .install-button { width: 44px; padding: 0; font-size: 0; gap: 0; }
   body:has(.game-screen:not([hidden])) .toolbar .install-button svg { width: 18px; height: 18px; }
   main:has(.game-screen:not([hidden])), .game-screen:not([hidden]), .game-layout { display: contents; }

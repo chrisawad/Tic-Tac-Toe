@@ -43,6 +43,8 @@ const difficultyHints = {
 const form = element<HTMLFormElement>('setup-form');
 const joinCode = element<HTMLInputElement>('join-code');
 const joinError = element('join-error');
+const shareGameDialog = element<HTMLDialogElement>('share-game-dialog');
+const gameLink = element<HTMLInputElement>('share-game-link');
 const resultDialog = element<HTMLDialogElement>('result-dialog');
 const connectionRoute = element('connection-route');
 const leaveDialog = element<HTMLDialogElement>('leave-dialog');
@@ -443,6 +445,38 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-home], 
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-dialog]')) {
   button.addEventListener('click', () => element<HTMLDialogElement>(button.dataset.dialog + '-dialog').showModal());
 }
+async function shareGame() {
+  const url = new URL(import.meta.env.BASE_URL, document.baseURI).href;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: document.title, url });
+      return;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+    }
+  }
+  gameLink.value = url;
+  element('share-game-status').textContent = '';
+  shareGameDialog.showModal();
+  gameLink.select();
+}
+for (const button of document.querySelectorAll('[data-share-game]')) {
+  button.addEventListener('click', shareGame);
+}
+async function copyGameLink() {
+  const status = element('share-game-status');
+  try {
+    await navigator.clipboard.writeText(gameLink.value);
+    status.textContent = 'Game link copied.';
+  } catch {
+    gameLink.focus();
+    gameLink.select();
+    status.textContent = 'Copy the selected link to share the game.';
+  }
+}
+if ('commandForElement' in HTMLButtonElement.prototype) gameLink.addEventListener('command', copyGameLink);
+else element('copy-game-link').addEventListener('click', copyGameLink);
+
 element('room-back').addEventListener('click', () => {
   multiplayer.leave();
   invitations.clear();

@@ -335,6 +335,74 @@ test('short landscape screens fit the menu, board and rematch through rotation',
   await expect(page.locator('#round-counter')).toHaveText('Round 2');
 });
 
+test('Share game opens the native sheet with the home link from setup, home, play and the result', async ({ page, baseURL }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'share', {
+    value: async (data: ShareData) => { document.documentElement.dataset.shared = data.url; },
+  }));
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto('./?room=ABC23#invite');
+  async function checkShare(surface = page.getByRole('banner')) {
+    const share = surface.getByRole('button', { name: 'Share game', exact: true });
+    await expect(share).toBeInViewport({ ratio: 1 });
+    await page.locator('html').evaluate(html => { delete html.dataset.shared; });
+    await share.click();
+    await expect(page.locator('html')).toHaveAttribute('data-shared', new URL('./', baseURL).href);
+  }
+  await checkShare();
+  await page.getByRole('button', { name: 'All modes' }).click();
+  await checkShare();
+  await page.setViewportSize({ width: 568, height: 320 });
+  await mode(page, 'local').click();
+  await checkShare();
+  await page.getByRole('button', { name: 'Start battle' }).click();
+  await square(page, 0).click();
+  await checkShare();
+  // An available update can put all four toolbar actions on screen at once.
+  await page.locator('#update-button').evaluate(button => { (button as HTMLButtonElement).hidden = false; });
+  for (const [width, height] of [[320, 568], [480, 320], [568, 320]]) {
+    await page.setViewportSize({ width, height });
+    const controls = page.locator('.toolbar button:visible');
+    for (const control of await controls.all()) {
+      await expect(control).toBeInViewport({ ratio: 1 });
+      await control.click({ trial: true });
+    }
+  }
+  for (const i of [3, 1, 4, 2]) await square(page, i).click();
+  await expect(page.locator('#result-dialog')).toBeVisible();
+  await checkShare(page.locator('#result-dialog'));
+});
+
+test('Share game handles cancellation, clipboard copying and manual copying', async ({ page, baseURL }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'share', { configurable: true, value: async () => { throw new DOMException('Cancelled', 'AbortError'); } });
+    Object.defineProperty(navigator, 'clipboard', { value: {
+      writeText: async (text: string) => {
+        if (document.documentElement.dataset.denyCopy) throw new DOMException('Denied', 'NotAllowedError');
+        document.documentElement.dataset.copied = text;
+      },
+    } });
+  });
+  await visit(page);
+  const share = page.getByRole('button', { name: 'Share game' });
+  const dialog = page.getByRole('dialog', { name: 'Share Tic Tac Toe' });
+  await share.click();
+  await expect(dialog).toBeHidden();
+  await page.evaluate(() => { Object.defineProperty(navigator, 'share', { value: undefined }); });
+  await share.click();
+  const link = dialog.getByLabel('Game link');
+  const url = new URL('./', baseURL).href;
+  await expect(link).toHaveValue(url);
+  await dialog.getByRole('button', { name: 'Copy link' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-copied', url);
+  await expect(dialog.getByRole('status')).toHaveText('Game link copied.');
+  await page.locator('html').evaluate(html => { html.dataset.denyCopy = 'true'; });
+  await dialog.getByRole('button', { name: 'Copy link' }).click();
+  await expect(link).toBeFocused();
+  await expect(dialog.getByRole('status')).toContainText('selected link');
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(share).toBeFocused();
+});
+
 test('online setup keeps host and join actions distinct and routes invites to Join', async ({ page }) => {
   await visit(page);
   await mode(page, 'online').click();
@@ -392,6 +460,8 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
   expect([...new URL(invite).searchParams.keys()]).toEqual(['room']);
+  await page.getByRole('button', { name: 'Share game' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-shared', new URL('./', invite).href);
   await page.locator('#share-room').click();
   await expect(page.locator('html')).toHaveAttribute('data-shared', invite);
   await signaling!.close({ code: 1001, reason: 'Connection interrupted' });
