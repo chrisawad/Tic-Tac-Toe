@@ -405,7 +405,9 @@ test('an older saved room with an occupied code offers a new invite immediately'
 });
 
 const testRelay = process.env.TEST_TURN_URL;
-test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
+const liveRelay = process.env.LIVE_TURN_TEST === '1';
+const requireRelay = Boolean(testRelay) || liveRelay;
+test(requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
   test.setTimeout(65_000);
   const secondBrowser = await playwright.chromium.launch();
@@ -416,14 +418,14 @@ test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers c
     for (const playerPage of [page, guest]) {
       const servers = [{ urls: testRelay || 'turn:relay.invalid:3478', username: process.env.TEST_TURN_USER || 'test', credential: process.env.TEST_TURN_PASSWORD || 'test' }];
       const config: RTCConfiguration = {};
-      if (testRelay) config.iceTransportPolicy = 'relay';
+      if (requireRelay) config.iceTransportPolicy = 'relay';
       if (testWorker) {
         await playerPage.route(testWorker, route => {
           expect(route.request().method()).toBe('POST');
           credentialRequests++;
           return route.fulfill({ json: { iceServers: servers }, headers: { 'Access-Control-Allow-Origin': '*' } });
         });
-      } else {
+      } else if (!liveRelay) {
         config.iceServers = servers;
       }
       await playerPage.addInitScript(overrides => {
@@ -442,7 +444,7 @@ test(testRelay ? 'two browsers show a relayed game connection' : 'two browsers c
     await guest.getByRole('button', { name: 'Join room' }).click();
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
     for (const device of [page, guest]) {
-      await expect(device.locator('#connection-route')).toHaveText(testRelay ? 'Via relay' : 'Direct');
+      await expect(device.locator('#connection-route')).toHaveText(requireRelay ? 'Via relay' : 'Direct');
       await expect(device.locator('#connection-route')).toBeInViewport({ ratio: 1 });
     }
     if (testWorker) expect(credentialRequests).toBe(2);
