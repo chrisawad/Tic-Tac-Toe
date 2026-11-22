@@ -11,10 +11,10 @@ async function visit(page: Page) {
   await dismissInstall(page);
 }
 
-async function startLocal(page: Page) {
+async function startLocal(page: Page, firstPlayer = 'Emu') {
   await visit(page);
   await mode(page, 'local').click();
-  await name(page, 'one').fill('Emu');
+  await name(page, 'one').fill(firstPlayer);
   await name(page, 'two').fill('Nova');
   await page.locator('#profile-one').getByRole('radio', { name: 'gold' }).check({ force: true });
   await page.getByRole('button', { name: 'Start battle' }).click();
@@ -45,6 +45,58 @@ test('local win, winning line, celebration, rematch, and saved score', async ({ 
   await expect(square(page, 4)).toHaveAttribute('aria-label', 'Square 5, X');
   await expect(page.locator('#score dd')).toHaveText(['1', '0', '0']);
   expect(exceptions).toEqual([]);
+});
+
+test('every winning line grows from its first square through its last on a stationary board', async ({ page }) => {
+  await startLocal(page);
+  const board = page.locator('#board');
+  const lines = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+  for (const [first, middle, last] of lines) {
+    const others = Array.from({ length: 9 }, (_, i) => i).filter(i => ![first, middle, last].includes(i));
+    for (const i of [first, others[0], middle, others[1]]) await square(page, i).click();
+    const before = await board.boundingBox();
+    await square(page, last).click();
+    const frames = await page.locator('#strike').evaluate(line => {
+      const animation = line.getAnimations()[0];
+      animation.pause();
+      const duration = Number(animation.effect!.getComputedTiming().duration);
+      return [0, .5, 1].map(progress => {
+        animation.currentTime = duration * progress;
+        return line.getBoundingClientRect().toJSON() as DOMRect;
+      });
+    });
+    const [start, halfway, end] = frames;
+    expect(Math.max(start.width, start.height)).toBeLessThan(5);
+    const length = (rect: DOMRect) => Math.hypot(rect.width, rect.height);
+    expect(length(halfway)).toBeGreaterThan(length(end) * .3);
+    expect(length(halfway)).toBeLessThan(length(end) * .95);
+    const sign = Math.sign(last % 3 - first % 3);
+    // The starting cap stays fixed while the other end travels across the cells.
+    const startEdge = sign < 0 ? 'right' : 'left';
+    expect(Math.abs(halfway[startEdge] - end[startEdge])).toBeLessThan(1);
+    expect(Math.abs(halfway.top - end.top)).toBeLessThan(1);
+    const center = (await square(page, middle).boundingBox())!;
+    expect(Math.abs(end.x + end.width / 2 - center.x - center.width / 2)).toBeLessThan(1);
+    expect(Math.abs(end.y + end.height / 2 - center.y - center.height / 2)).toBeLessThan(1);
+    await expect(page.locator('#result-dialog')).toBeVisible();
+    expect(await board.boundingBox()).toEqual(before);
+    await page.getByRole('button', { name: 'Rematch' }).click();
+    expect(await board.boundingBox()).toEqual(before);
+  }
+});
+
+test('a long winner name fits beside the result with reduced motion', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 650 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const winner = 'W'.repeat(20);
+  await startLocal(page, winner);
+  for (const i of [2, 0, 4, 1]) await square(page, i).click();
+  const board = await page.locator('#board').boundingBox();
+  await square(page, 6).click();
+  await expect(page.locator('#turn-status')).toHaveText(winner + ' wins the round!');
+  await expect(page.locator('#strike')).toBeVisible();
+  expect(await page.locator('#strike').evaluate(line => line.getAnimations().length)).toBe(0);
+  expect(await page.locator('#board').boundingBox()).toEqual(board);
 });
 
 test('draw uses its own dialog and can return to the board', async ({ page }) => {
@@ -278,6 +330,7 @@ test('short landscape screens fit the menu, board and rematch through rotation',
   for (const cell of [1, 4, 2]) await square(page, cell).click();
   const rematch = page.getByRole('button', { name: 'Rematch' });
   await expect(rematch).toBeInViewport({ ratio: 1 });
+  expect(await page.locator('#board').boundingBox()).toEqual(board);
   await rematch.click();
   await expect(page.locator('#round-counter')).toHaveText('Round 2');
 });

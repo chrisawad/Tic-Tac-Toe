@@ -133,7 +133,8 @@
         <div class="game-heading">
           <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> All modes</button>
           <span id="connection-route" role="status" aria-label="Multiplayer connection" hidden></span>
-          <span id="round-counter"></span>
+          <span id="round-counter" class="round-badge"></span>
+          <button id="result-button" class="round-badge" type="button" aria-haspopup="dialog" aria-describedby="round-counter" hidden>Round result</button>
         </div>
         <div class="game-layout">
           <div class="game-info">
@@ -146,14 +147,11 @@
               <dl id="score" class="score-grid"></dl>
             </div>
           </div>
-          <div class="board-side">
-            <div class="board-space">
-              <div class="board-wrap">
-                <div id="board" class="board" role="group" aria-label="Tic Tac Toe board"></div>
-                <div id="strike" class="strike" hidden></div>
-              </div>
+          <div class="board-space">
+            <div class="board-wrap">
+              <div id="board" class="board" role="group" aria-label="Tic Tac Toe board"></div>
+              <div id="strike" class="strike" aria-hidden="true" hidden></div>
             </div>
-            <button id="result-button" class="button board-action" type="button" hidden>Round result</button>
           </div>
         </div>
       </section>

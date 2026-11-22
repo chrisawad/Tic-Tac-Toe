@@ -225,16 +225,26 @@ function updateStrike() {
   const board = boardElement.getBoundingClientRect();
   const start = cells[first].getBoundingClientRect();
   const end = cells[last].getBoundingClientRect();
+  if (!start.width) return;
   const x = start.left + start.width / 2 - board.left;
   const y = start.top + start.height / 2 - board.top;
   const dx = end.left + end.width / 2 - board.left - x;
   const dy = end.top + end.height / 2 - board.top - y;
-  const radians = Math.atan2(dy, dx);
-  const overhang = start.width * .27;
-  strike.style.setProperty('--left', `${x - Math.cos(radians) * overhang}px`);
-  strike.style.setProperty('--top', `${y - Math.sin(radians) * overhang}px`);
-  strike.style.setProperty('--length', `${Math.hypot(dx, dy) + overhang * 2}px`);
-  strike.style.setProperty('--angle', `${radians}rad`);
+  // Leave the same inset at the edge of a winning cell in every direction.
+  const extension = start.width * .4 / Math.max(Math.abs(dx), Math.abs(dy));
+  strike.style.setProperty('--left', `${x - dx * extension}px`);
+  strike.style.setProperty('--top', `${y - dy * extension}px`);
+  strike.style.setProperty('--length', `${Math.hypot(dx, dy) * (1 + 2 * extension)}px`);
+  strike.style.setProperty('--angle', `${Math.atan2(dy, dx)}rad`);
+}
+
+function showTurnStatus(message: string, playerName?: string) {
+  const status = element('turn-status');
+  if (playerName) {
+    const name = document.createElement('span');
+    name.textContent = playerName;
+    status.replaceChildren(name, message);
+  } else status.textContent = message;
 }
 
 function renderGame() {
@@ -245,11 +255,15 @@ function renderGame() {
   const active = playerFor(current, turn(current));
   const winner = result?.mark ? playerFor(current, result.mark) : null;
   const isMyTurn = mode === 'local' || active === (mode === 'ai' ? 0 : roomPlayer);
-  element('round-counter').textContent = `Round ${current.round}`;
-  element('turn-status').textContent = winner !== null ? `${current.players[winner].name} wins the round!`
-    : result ? 'The round is a draw.'
-      : mode === 'online' && isMyTurn ? `Your turn · ${turn(current)}`
-        : mode === 'ai' && active === 1 ? 'T-3PO is thinking…' : `${current.players[active].name}’s turn · ${turn(current)}`;
+  const roundCounter = element('round-counter');
+  roundCounter.textContent = `Round ${current.round}`;
+  roundCounter.hidden = Boolean(result);
+  element('result-button').hidden = !result;
+  if (winner !== null) showTurnStatus(' wins the round!', current.players[winner].name);
+  else if (result) showTurnStatus('The round is a draw.');
+  else if (mode === 'online' && isMyTurn) showTurnStatus(`Your turn · ${turn(current)}`);
+  else if (mode === 'ai' && active === 1) showTurnStatus('T-3PO is thinking…');
+  else showTurnStatus(`’s turn · ${turn(current)}`, current.players[active].name);
   const players = element('players');
   players.replaceChildren(...current.players.map((profile, index) => {
     const card = document.createElement('div');
@@ -292,7 +306,6 @@ function renderGame() {
   });
   strike.hidden = !result?.mark;
   updateStrike();
-  element('result-button').hidden = !result;
 }
 
 function showResult(animate: boolean) {
