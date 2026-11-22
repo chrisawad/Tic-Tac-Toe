@@ -16,6 +16,7 @@ export function setupInstall(
   dialog: HTMLDialogElement,
   update: HTMLButtonElement,
   notify: (message: string) => void,
+  { offerOnLaunch }: { offerOnLaunch: boolean },
 ) {
   const nav = navigator as InstallNavigator;
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
@@ -51,7 +52,7 @@ export function setupInstall(
     confirm.hidden = !canInstall();
     steps.hidden = canInstall();
     if (standalone && dialog.open) dialog.close();
-    else if (checked && !standalone && !offered) offer();
+    else if (offerOnLaunch && checked && !standalone && !offered) offer();
   }
   async function checkRelated() {
     if (!isSecureContext || !nav.getInstalledRelatedApps) return;

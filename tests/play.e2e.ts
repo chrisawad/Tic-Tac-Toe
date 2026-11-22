@@ -6,8 +6,8 @@ const mode = (page: Page, value: 'ai' | 'local' | 'online') => page.locator('[da
 
 const dismissInstall = (page: Page) => page.getByRole('button', { name: 'Not now' }).click();
 
-async function visit(page: Page, url = './') {
-  await page.goto(url);
+async function visit(page: Page) {
+  await page.goto('./');
   await dismissInstall(page);
 }
 
@@ -183,6 +183,15 @@ test('manual install instructions stay accessible from the toolbar and return on
   await expect(page.locator('#setup-title')).toBeVisible();
   await page.reload();
   await expect(dialog).toBeVisible();
+
+  await page.goto('./?room=abc23');
+  await expect(page.locator('#join-code')).toHaveValue('ABC23');
+  await page.locator('#join-code').click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Install app' }).click();
+  await expect(dialog).toContainText('Add to Home Screen');
+  await dismissInstall(page);
+  await expect(page.locator('#join-code')).toHaveValue('ABC23');
 });
 
 test('an existing related app skips the install popup in a browser tab', async ({ page }) => {
@@ -287,13 +296,14 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
   await page.getByText('Host a game', { exact: true }).click();
   await expect(page.locator('#join-error')).toBeEmpty();
   await expect(page.locator('#join-code')).not.toHaveAttribute('aria-invalid');
-  await visit(page, './?room=ABC23');
+  await page.goto('./?room=ABC23');
+  await expect(page.locator('#install-dialog')).toBeHidden();
   await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
 });
 
 test('offline invite explains the network failure and preserves a valid code', async ({ page, context }) => {
-  await visit(page, './?room=ABC23');
+  await page.goto('./?room=ABC23');
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Join room' }).click();
   const error = page.locator('#join-error');
@@ -318,7 +328,8 @@ test('real online room carries a game and rematch between two browser contexts',
   expect(invite).toBe(new URL('?room=' + await code.textContent(), baseURL).href);
   const guest = await browser.newPage();
   try {
-    await visit(guest, invite);
+    await guest.goto(invite);
+    await expect(guest.locator('#install-dialog')).toBeHidden();
     await expect(guest.locator('#join-code')).toHaveValue((await code.textContent())!);
     await name(guest, 'one').fill('Guest');
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });

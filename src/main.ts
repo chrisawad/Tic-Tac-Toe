@@ -541,11 +541,15 @@ createIcons({
   attrs: { 'aria-hidden': 'true' },
 });
 updateSound();
-setupInstall(element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'), notify);
 const url = new URL(location.href);
 const invited = url.searchParams.get('room')?.toUpperCase() ?? '';
-if (isRoomCode(invited)) {
+const fromInvite = isRoomCode(invited);
+if (fromInvite) {
   openSetup('online', invited);
   url.searchParams.delete('room');
   history.replaceState(null, '', url);
 }
+setupInstall(
+  element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
+  notify, { offerOnLaunch: !fromInvite },
+);
