@@ -22,7 +22,6 @@ export function createMultiplayer<Profile, Action extends object>(
   let lobby: HostLobby<Profile> | null = null;
   let retryTimer: number | undefined;
   let retries = 0;
-  let joinIssue = '';
   let retryUntil = 0;
   let attempt = 0;
 
@@ -32,7 +31,6 @@ export function createMultiplayer<Profile, Action extends object>(
     lobby = null;
     retries = 0;
     retryUntil = 0;
-    joinIssue = '';
   }
 
   function disconnect() {
@@ -75,9 +73,9 @@ export function createMultiplayer<Profile, Action extends object>(
           retries = 0;
           lobby = { code, token, profile };
           store.remember(lobby);
-          events.invite(code, joinIssue || 'Waiting for a friend to join…');
+          events.invite(code, 'Waiting for a friend to join…');
         },
-        connecting() { events.status?.('Room found. Still connecting the devices… Keep both games on screen.'); },
+        status: events.status,
         route: events.route,
         start(players, seat) {
           clearLobby();
@@ -89,8 +87,7 @@ export function createMultiplayer<Profile, Action extends object>(
           attempt++;
           room = undefined;
           if (lobby && (reason === 'guest' || reason === 'service')) {
-            if (reason === 'guest') joinIssue = message;
-            events.status?.(navigator.onLine ? `${message} Reopening room ${lobby.code}…`
+            events.status?.(navigator.onLine ? `Reopening room ${lobby.code}…`
               : `Room ${lobby.code} will reopen when you’re back online.`);
             if (!document.hidden && navigator.onLine) {
               retryTimer = window.setTimeout(resume, Math.min(1000 * 2 ** retries, 15_000));

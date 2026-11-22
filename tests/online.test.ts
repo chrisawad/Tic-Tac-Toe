@@ -22,6 +22,16 @@ function attempt(serviceConnected = true) {
   return { rtc, channel, peer, failure, start };
 }
 
+function pendingChannel(id: string) {
+  const rtc = Object.assign(new EventTarget(), { remoteDescription: { type: 'answer' }, iceConnectionState: 'checking' });
+  const channel = Object.assign(new EventEmitter(), {
+    peer: id, peerConnection: rtc as typeof rtc | null, open: false, send: vi.fn(), close: vi.fn(),
+  });
+  // An unopened channel can be cleaned up without emitting close.
+  channel.close.mockImplementation(() => { channel.peerConnection = null; });
+  return channel;
+}
+
 describe('room failure messages', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -68,6 +78,74 @@ describe('room failure messages', () => {
     rtc.remoteDescription = { type: 'answer' };
     channel.emit('close');
     expect(failure).toHaveBeenCalledWith(expect.stringContaining('temporary access to the backup relay'), undefined);
+  });
+
+  it.each(['error', 'silent close', 'new offer'])('keeps the invite open across a pending guest’s %s', issue => {
+    const peer = Object.assign(new EventEmitter(), { open: true, destroy: vi.fn() });
+    createPeer.mockClear().mockReturnValue(peer);
+    const handlers = { waiting: vi.fn(), status: vi.fn(), start: vi.fn(), action: vi.fn(), failure: vi.fn() };
+    const host = openPeerRoom(ticTacToeOnline, defaultPlayers[0], null, handlers);
+    peer.emit('open');
+    const first = pendingChannel('guest');
+    peer.emit('connection', first);
+    if (issue === 'error') {
+      first.emit('error', new Error('failed'));
+      expect(handlers.status).toHaveBeenCalledWith(expect.stringContaining('Room is still open'));
+    } else if (issue === 'silent close') {
+      first.close();
+      vi.advanceTimersByTime(16_000);
+    }
+    const second = pendingChannel('guest');
+    peer.emit('connection', second);
+    first.emit('close');
+    first.emit('data', { kind: 'hello', profile: defaultPlayers[1] });
+    peer.emit('error', { type: 'webrtc' });
+    peer.emit('error', { type: 'peer-unavailable' });
+    expect(handlers.start).not.toHaveBeenCalled();
+    second.open = true;
+    second.emit('data', { kind: 'hello', profile: defaultPlayers[1] });
+    expect(handlers.start).toHaveBeenCalledOnce();
+    expect(handlers.failure).not.toHaveBeenCalled();
+    expect(createPeer).toHaveBeenCalledOnce();
+    expect(peer.destroy).not.toHaveBeenCalled();
+    host.close();
+  });
+
+  it.each(['exhausted', 'cancelled'])('bounds the relay retry for a known room when %s', async outcome => {
+    const game = { ...ticTacToeOnline, relayUrl: 'https://worker.example/' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      iceServers: [{ urls: 'turn:relay.example:3478', username: 'test', credential: 'test' }],
+    })));
+    const first = pendingChannel('host');
+    const second = pendingChannel('host');
+    const peer = Object.assign(new EventEmitter(), {
+      open: true, destroy: vi.fn(), options: { config: {} as RTCConfiguration },
+      connect: vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second),
+    });
+    createPeer.mockClear().mockReturnValue(peer);
+    const handlers = { waiting: vi.fn(), status: vi.fn(), start: vi.fn(), action: vi.fn(), failure: vi.fn() };
+    const guest = openPeerRoom(game, defaultPlayers[1], 'ABC23', handlers);
+    await vi.waitFor(() => expect(peer.listenerCount('open')).toBe(1));
+    peer.emit('open');
+    expect(createPeer.mock.lastCall![1].config.iceTransportPolicy).not.toBe('relay');
+    first.emit('error', new Error('failed'));
+    first.emit('close');
+    expect(handlers.status).toHaveBeenCalledExactlyOnceWith('Room found. Retrying through the backup relay…');
+    expect(handlers.failure).not.toHaveBeenCalled();
+    if (outcome === 'cancelled') guest.close();
+    vi.advanceTimersByTime(1000);
+    if (outcome === 'cancelled') {
+      expect(peer.connect).toHaveBeenCalledOnce();
+      expect(handlers.failure).not.toHaveBeenCalled();
+    } else {
+      expect(peer.options.config.iceTransportPolicy).toBe('relay');
+      expect(peer.connect.mock.calls[1]).toEqual(peer.connect.mock.calls[0]);
+      second.emit('error', new Error('failed'));
+      vi.advanceTimersByTime(60_000);
+      expect(peer.connect).toHaveBeenCalledTimes(2);
+      expect(handlers.failure).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('try joining again'), undefined);
+    }
+    expect(createPeer).toHaveBeenCalledOnce();
   });
 
   it.each([

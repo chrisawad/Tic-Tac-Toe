@@ -407,18 +407,21 @@ test('an older saved room with an occupied code offers a new invite immediately'
 const testRelay = process.env.TEST_TURN_URL;
 const liveRelay = process.env.LIVE_TURN_TEST === '1';
 const requireRelay = Boolean(testRelay) || liveRelay;
-test(requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server', async ({ page, playwright, isMobile }) => {
+const testWorker = testRelay && process.env.TEST_TURN_WORKER_URL;
+const retryThroughRelay = Boolean(testWorker) || liveRelay;
+const routeTest = retryThroughRelay ? 'a failed first connection automatically recovers through the relay'
+  : requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server';
+test(routeTest, async ({ page, playwright, isMobile }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
   test.setTimeout(65_000);
   const secondBrowser = await playwright.chromium.launch();
   try {
     const guest = await secondBrowser.newPage({ isMobile });
-    const testWorker = testRelay && process.env.TEST_TURN_WORKER_URL;
     let credentialRequests = 0;
     for (const playerPage of [page, guest]) {
       const servers = [{ urls: testRelay || 'turn:relay.invalid:3478', username: process.env.TEST_TURN_USER || 'test', credential: process.env.TEST_TURN_PASSWORD || 'test' }];
       const config: RTCConfiguration = {};
-      if (requireRelay) config.iceTransportPolicy = 'relay';
+      if (requireRelay && !retryThroughRelay) config.iceTransportPolicy = 'relay';
       if (testWorker) {
         await playerPage.route(testWorker, route => {
           expect(route.request().method()).toBe('POST');
@@ -428,13 +431,21 @@ test(requireRelay ? 'two browsers show a relayed game connection' : 'two browser
       } else if (!liveRelay) {
         config.iceServers = servers;
       }
-      await playerPage.addInitScript(overrides => {
+      await playerPage.addInitScript(({ overrides, interruptFirstAnswer }) => {
         window.RTCPeerConnection = class extends RTCPeerConnection {
           constructor(config?: RTCConfiguration) {
             super({ ...config, ...overrides });
           }
+          override async setRemoteDescription(description: RTCSessionDescriptionInit) {
+            await super.setRemoteDescription(description);
+            if (interruptFirstAnswer && description.type === 'answer') {
+              interruptFirstAnswer = false;
+              Object.defineProperty(this, 'iceConnectionState', { value: 'failed' });
+              this.dispatchEvent(new Event('iceconnectionstatechange'));
+            }
+          }
         };
-      }, config);
+      }, { overrides: config, interruptFirstAnswer: retryThroughRelay && playerPage === guest });
     }
     await visit(page);
     await mode(page, 'online').click();
@@ -442,6 +453,7 @@ test(requireRelay ? 'two browsers show a relayed game connection' : 'two browser
     await expect(page.locator('#room-qr')).toBeVisible();
     await guest.goto(await page.locator('#invite-link').inputValue());
     await guest.getByRole('button', { name: 'Join room' }).click();
+    if (retryThroughRelay) await expect(guest.locator('#room-status')).toContainText('Retrying through the backup relay');
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
     for (const device of [page, guest]) {
       await expect(device.locator('#connection-route')).toHaveText(requireRelay ? 'Via relay' : 'Direct');

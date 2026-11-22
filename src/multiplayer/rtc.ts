@@ -1,6 +1,5 @@
 import { util, type DataConnection } from 'peerjs';
 
-const wifiHelp = 'On shared Wi-Fi, check whether the router isolates devices, especially on a guest network.';
 export const defaultRtcConfig: RTCConfiguration = {
   ...util.defaultConfig,
   iceServers: [...util.defaultConfig.iceServers, { urls: 'stun:stun.cloudflare.com:3478' }],
@@ -65,8 +64,8 @@ export function trackConnectionSetup(connection: DataConnection, host: boolean, 
     if (networkConnected || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
       return 'Room found. The devices reached each other, but the game channel didn’t open. Keep both games on screen and try joining again.';
     }
-    if (relayIssue && !gatheredRelay) return `Room found, but no direct connection opened. ${relayIssue} ${wifiHelp}`;
+    if (relayIssue && !gatheredRelay) return `Room found, but no direct connection opened. ${relayIssue} Try joining again.`;
     if (relayUnavailable) return 'Room found, but no direct connection opened. This device couldn’t get temporary access to the backup relay. Try joining again in a minute.';
-    return `Room found, but the devices couldn’t establish a game connection. ${wifiHelp}`;
+    return 'Room found, but the devices couldn’t establish a game connection. Keep both games open and try joining again.';
   };
 }
