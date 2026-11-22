@@ -1,7 +1,7 @@
 import { isPlayer, type Player } from './game';
-import { isRoomCode } from './online';
+import { isRoomCode, type HostedRoom } from './online';
 
-export type HostLobby = { code: string; profile: Player };
+export type HostLobby = HostedRoom & { profile: Player };
 const key = 'ttt:waiting-host';
 const maxAge = 2 * 60 * 60 * 1000;
 
@@ -16,7 +16,10 @@ export function readHostLobby(): HostLobby | null {
     const saved = JSON.parse(storage().getItem(key) ?? 'null');
     if (saved && typeof saved.code === 'string' && isRoomCode(saved.code) && isPlayer(saved.profile)
       && Number.isFinite(saved.savedAt) && Date.now() - saved.savedAt < maxAge) {
-      return { code: saved.code, profile: saved.profile };
+      // Older saves lack a credential. Reuse one across windows only with exclusive ownership.
+      const token = navigator.locks && typeof saved.token === 'string' && /^[a-f0-9-]{36}$/i.test(saved.token)
+        ? saved.token : undefined;
+      return { code: saved.code, profile: saved.profile, token };
     }
   } catch { /* Storage can be unavailable in a private window. */ }
   return null;
@@ -29,6 +32,7 @@ export function rememberHostLobby(lobby: HostLobby) {
 
 export function forgetHostLobby(lobby: HostLobby) {
   try {
-    if (readHostLobby()?.code === lobby.code) storage().removeItem(key);
+    const saved = readHostLobby();
+    if (saved?.code === lobby.code && (!navigator.locks || saved.token === lobby.token)) storage().removeItem(key);
   } catch { /* Storage is optional. */ }
 }

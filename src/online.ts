@@ -40,13 +40,14 @@ export function readyForRematch(match: Match, ready: [boolean, boolean], actor: 
   return ready.every(Boolean) ? next : match;
 }
 
-type RoomRetry = 'service' | 'host' | 'busy' | 'guest';
+export type HostedRoom = { code: string; token?: string };
+type RoomFailure = 'service' | 'host' | 'guest' | 'other-window';
 
 type Handlers = {
-  waiting: (code: string) => void;
+  waiting: (code: string, token: string) => void;
   start: (match: Match, index: PlayerIndex) => void;
   action: (action: RoundAction) => void;
-  failure: (message: string, retry?: RoomRetry) => void;
+  failure: (message: string, reason?: RoomFailure) => void;
 };
 
 export const offlineMessage = 'This device appears to be offline. Reconnect to the internet and try again.';
@@ -80,9 +81,11 @@ function trackConnectionSetup(connection: DataConnection, host: boolean, signal:
   };
 }
 
-export function openRoom(profile: Player, code: string | null, handlers: Handlers, restoreHostCode?: string) {
+export function openRoom(profile: Player, code: string | null, handlers: Handlers, restored?: HostedRoom) {
   const host = code === null;
+  const hostToken = host ? restored?.token ?? crypto.randomUUID() : undefined;
   let peer: Peer;
+  let releaseHostLock: (() => void) | undefined;
   let channel: DataConnection | undefined;
   let countdown: number | undefined;
   let connectionLost: number | undefined;
@@ -108,12 +111,13 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     window.clearInterval(heartbeat);
     listeners.abort();
     if (graceful && playing) window.setTimeout(() => peer.destroy(), 200);
-    else peer.destroy();
+    else peer?.destroy();
+    releaseHostLock?.();
   }
-  function fail(message: string, retry?: RoomRetry) {
+  function fail(message: string, reason?: RoomFailure) {
     if (closed) return;
     close();
-    handlers.failure(navigator.onLine === false ? offlineMessage : message, retry);
+    handlers.failure(navigator.onLine === false ? offlineMessage : message, reason);
   }
   function failConnection() {
     if (playing) fail(lostOpponent);
@@ -189,19 +193,21 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
 
   function register(roomCode: string) {
     attempts++;
-    const registered = new Peer(host ? prefix + roomCode : prefix + 'guest-' + crypto.randomUUID());
+    const registered = hostToken
+      ? new Peer(prefix + roomCode, { token: hostToken })
+      : new Peer(prefix + 'guest-' + crypto.randomUUID());
     peer = registered;
     timeLimit(() => fail('The room service didn’t respond in time. Check your internet connection and try again.', 'service'));
     registered.on('open', () => {
       if (closed || registered !== peer) return;
       cancelTimeout();
-      if (host) handlers.waiting(roomCode);
+      if (hostToken) handlers.waiting(roomCode, hostToken);
       else useConnection(peer.connect(prefix + roomCode, { reliable: true, serialization: 'json' }));
     });
     if (host) registered.on('connection', useConnection);
     registered.on('error', error => {
       if (closed || registered !== peer || (playing && channel?.open)) return;
-      if (host && !restoreHostCode && error.type === 'unavailable-id' && attempts < 4) {
+      if (host && !restored && error.type === 'unavailable-id' && attempts < 4) {
         register(newCode());
         registered.destroy();
       } else if (error.type === 'peer-unavailable') {
@@ -210,7 +216,7 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
       } else if (error.type === 'browser-incompatible') {
         fail('This browser doesn’t support the connection used for online play. Open the game in an up-to-date browser.');
       } else if (error.type === 'unavailable-id') {
-        if (restoreHostCode) fail(`Room ${roomCode} is already in use. Return to the original game window or create a new room.`, 'busy');
+        if (restored) fail(`Room ${roomCode} is still in use. Return to the original game window, or create a new room and share its new invite.`);
         else fail('The room service couldn’t assign a unique ID. Try again to get a new one.');
       } else if (error.type === 'webrtc') {
         fail('The browser reported a WebRTC error while setting up the connection. Reopen the game in an up-to-date browser and try again.',
@@ -228,7 +234,21 @@ export function openRoom(profile: Player, code: string | null, handlers: Handler
     });
   }
 
-  register(code ?? restoreHostCode ?? newCode());
+  const roomCode = code ?? restored?.code ?? newCode();
+  if (hostToken && navigator.locks) {
+    const held = new Promise<void>(resolve => { releaseHostLock = resolve; });
+    // A page can resume before the browser finishes releasing its previous lock.
+    countdown = window.setTimeout(() => {
+      fail(`Room ${roomCode} is open in another game window on this device. Return there to use your original invite.`, 'other-window');
+    }, 1000);
+    void navigator.locks.request(prefix + hostToken, { signal: listeners.signal }, () => {
+      if (closed) return;
+      register(roomCode);
+      return held;
+    }).catch(() => fail('This browser couldn’t open the room. Reopen the game and try again.'));
+  } else {
+    register(roomCode);
+  }
   // A cached page can resume in the same match. Only an actual departure sends leave.
   window.addEventListener('pagehide', event => { if (!event.persisted) depart(); }, { signal: listeners.signal });
   return { close: () => close(true), send: (action: RoundAction) => transmit(action) };

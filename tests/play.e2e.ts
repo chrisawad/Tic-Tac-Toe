@@ -316,11 +316,14 @@ test('offline invite explains the network failure and preserves a valid code', a
 
 test('a shared waiting room survives suspension and relaunch and clears on exit', async ({ page, context, isMobile }) => {
   const registrations: string[] = [];
+  let owner: string | null = null;
   let signaling: WebSocketRoute;
   await context.routeWebSocket(/\/peerjs\?/, socket => {
     signaling = socket;
-    registrations.push(new URL(socket.url()).searchParams.get('id')!);
-    socket.send(JSON.stringify({ type: 'OPEN' }));
+    const params = new URL(socket.url()).searchParams;
+    registrations.push(params.get('id')!);
+    owner ??= params.get('token');
+    socket.send(JSON.stringify({ type: params.get('token') === owner ? 'OPEN' : 'ID-TAKEN' }));
   });
   await context.addInitScript(standalone => {
     if (standalone) Object.defineProperty(navigator, 'standalone', { value: true });
@@ -335,6 +338,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await page.getByRole('button', { name: 'Create a room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
+  expect([...new URL(invite).searchParams.keys()]).toEqual(['room']);
   await page.locator('#share-room').click();
   await expect(page.locator('html')).toHaveAttribute('data-shared', invite);
   await signaling!.close({ code: 1001, reason: 'Connection interrupted' });
@@ -358,13 +362,57 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await expect(restored.locator('#home')).toBeVisible();
 });
 
+test('opening a second installed window preserves the waiting room in the original', async ({ page, context }) => {
+  await context.addInitScript(() => Object.defineProperty(navigator, 'standalone', { value: true }));
+  let connections = 0;
+  await context.routeWebSocket(/\/peerjs\?/, socket => {
+    connections++;
+    socket.send(JSON.stringify({ type: 'OPEN' }));
+  });
+  await page.goto('./');
+  await mode(page, 'online').click();
+  await page.getByRole('button', { name: 'Create a room' }).click();
+  await expect(page.locator('#room-qr')).toBeVisible();
+  const invite = await page.locator('#invite-link').inputValue();
+  const other = await context.newPage();
+  await other.goto('./');
+  await expect(other.locator('#join-error')).toContainText('another game window');
+  expect(connections).toBe(1);
+  await other.close();
+  await page.reload();
+  await expect(page.locator('#room-status')).toContainText('Waiting for a friend');
+  await expect(page.locator('#invite-link')).toHaveValue(invite);
+  expect(connections).toBe(2);
+});
+
+test('an older saved room with an occupied code offers a new invite immediately', async ({ page, context }) => {
+  await page.goto('./');
+  await page.evaluate(() => sessionStorage.setItem('ttt:waiting-host', JSON.stringify({
+    code: 'ABC23', profile: { name: 'Host', color: 'violet' }, savedAt: Date.now(),
+  })));
+  let attempts = 0;
+  await context.routeWebSocket(/\/peerjs\?/, socket => {
+    const occupied = new URL(socket.url()).searchParams.get('id')?.endsWith('ABC23');
+    if (occupied) attempts++;
+    socket.send(JSON.stringify({ type: occupied ? 'ID-TAKEN' : 'OPEN' }));
+  });
+  await page.reload();
+  await expect(page.locator('#join-error')).toContainText('create a new room and share its new invite');
+  expect(attempts).toBe(1);
+  await page.getByRole('button', { name: 'Create a room' }).click();
+  await expect(page.locator('#room-qr')).toBeVisible();
+  await expect(page.locator('#room-code')).not.toHaveText('ABC23');
+});
+
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live online room smoke test');
   test.setTimeout(85_000);
   await visit(page);
   await mode(page, 'online').click();
   await name(page, 'one').fill('Host');
+  const registration = page.waitForEvent('websocket', socket => new URL(socket.url()).searchParams.has('token'));
   await page.getByRole('button', { name: 'Create a room' }).click();
+  const registrationUrl = (await registration).url();
   const code = page.locator('#room-code');
   await expect(code).toHaveText(/^[A-Z2-9]{5}$/, { timeout: 24000 });
   await expect(page.locator('#room-qr')).toBeVisible();
@@ -376,6 +424,7 @@ test('real online room carries a game and rematch between two browser contexts',
   await expect(page.locator('#room-status')).toContainText('back online');
   await hostTab.send('Page.setWebLifecycleState', { state: 'frozen' });
   const guest = await browser.newPage();
+  let staleSocket: WebSocket | undefined;
   try {
     await guest.goto(invite);
     await expect(guest.locator('#install-dialog')).toBeHidden();
@@ -384,6 +433,14 @@ test('real online room carries a game and rematch between two browser contexts',
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });
     await guest.getByRole('button', { name: 'Join room' }).click();
     await expect(guest.locator('#room-status')).toContainText('Waiting for room', { timeout: 24000 });
+    // Keep this test host's registration occupied, as if its phone lost the socket
+    // without the service noticing. It stays registered while the host resumes.
+    staleSocket = new WebSocket(registrationUrl);
+    await new Promise<void>((resolve, reject) => {
+      staleSocket!.onmessage = event => JSON.parse(String(event.data)).type === 'OPEN'
+        ? resolve() : reject(new Error('The test registration was refused'));
+      staleSocket!.onerror = () => reject(new Error('The test registration could not connect'));
+    });
     await hostTab.send('Page.setWebLifecycleState', { state: 'active' });
     await page.context().setOffline(false);
     await page.reload();
@@ -414,6 +471,7 @@ test('real online room carries a game and rematch between two browser contexts',
     await guest.getByRole('button', { name: 'Leave room', exact: true }).click();
     await expect(page.locator('#join-error')).toHaveText('Your opponent left the room.');
   } finally {
+    staleSocket?.close();
     await guest.close();
   }
 });

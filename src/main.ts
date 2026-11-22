@@ -431,9 +431,9 @@ function connect(profile: Player, code: string | null) {
   showScreen('room');
   try {
     room = openRoom(profile, code, {
-      waiting: nextCode => {
+      waiting: (nextCode, token) => {
         hostRetries = 0;
-        hostLobby = { code: nextCode, profile };
+        hostLobby = { code: nextCode, token, profile };
         rememberHostLobby(hostLobby);
         void showInvite(nextCode);
       },
@@ -448,11 +448,10 @@ function connect(profile: Player, code: string | null) {
       action: action => receive(action, roomPlayer === 0 ? 1 : 0),
       failure: (message, retry) => {
         room = undefined;
-        if (hostLobby && (retry === 'service' || retry === 'guest' || (retry === 'busy' && hostRetries < 8))) {
+        if (hostLobby && (retry === 'service' || retry === 'guest')) {
           if (retry === 'guest') hostJoinIssue = message;
           const status = element('room-status');
           if (!navigator.onLine) status.textContent = `Room ${hostLobby.code} will reopen when you’re back online.`;
-          else if (retry === 'busy') status.textContent = `Waiting for the previous connection to release room ${hostLobby.code}…`;
           else status.textContent = `${message} Reopening room ${hostLobby.code}…`;
           if (!document.hidden && navigator.onLine) {
             retryTimer = window.setTimeout(resumeHost, Math.min(1000 * 2 ** hostRetries, 15_000));
@@ -466,11 +465,13 @@ function connect(profile: Player, code: string | null) {
           return;
         }
         if (leaveDialog.open) leaveDialog.close('stay');
+        // The other window still needs the saved registration to resume its room.
+        if (retry === 'other-window') hostLobby = null;
         goHome();
         openSetup('online', code ?? '');
         showRoomError(message);
       },
-    }, hostLobby?.code);
+    }, hostLobby ?? undefined);
   } catch {
     clearLobby();
     openSetup('online', code ?? '');

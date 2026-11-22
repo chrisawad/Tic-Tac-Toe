@@ -4,7 +4,7 @@ import { defaultPlayers } from '../src/game';
 import { openRoom } from '../src/online';
 
 const { createPeer } = vi.hoisted(() => ({ createPeer: vi.fn() }));
-vi.mock('peerjs', () => ({ Peer: class { constructor(id: string) { return createPeer(id); } } }));
+vi.mock('peerjs', () => ({ Peer: class { constructor(id: string, options?: { token: string }) { return createPeer(id, options); } } }));
 
 function attempt(serviceConnected = true) {
   const rtc = Object.assign(new EventTarget(), { remoteDescription: null as { type: 'answer' } | null });
@@ -72,13 +72,30 @@ describe('room failure messages', () => {
     expect(game.failure).toHaveBeenCalledWith(expect.stringContaining('Lost contact'), undefined);
   });
 
-  it('keeps the shared code when the old registration is still busy', () => {
+  it('stops on a genuine registration conflict without replacing the shared code', () => {
     const peer = Object.assign(new EventEmitter(), { destroy: vi.fn() });
     createPeer.mockClear().mockReturnValue(peer);
     const failure = vi.fn();
-    openRoom(defaultPlayers[0], null, { waiting: vi.fn(), start: vi.fn(), action: vi.fn(), failure }, 'ABC23');
+    openRoom(defaultPlayers[0], null, { waiting: vi.fn(), start: vi.fn(), action: vi.fn(), failure }, { code: 'ABC23' });
     peer.emit('error', { type: 'unavailable-id' });
-    expect(createPeer).toHaveBeenCalledExactlyOnceWith('chrisawad-tic-tac-toe-v1-ABC23');
-    expect(failure).toHaveBeenCalledWith(expect.stringContaining('Room ABC23 is already in use'), 'busy');
+    expect(createPeer).toHaveBeenCalledExactlyOnceWith('chrisawad-tic-tac-toe-v1-ABC23', { token: expect.any(String) });
+    expect(failure).toHaveBeenCalledWith(expect.stringContaining('Room ABC23 is still in use'), undefined);
+  });
+
+  it('reuses the current host session across an in-page reconnect without browser locks', () => {
+    const waiting = vi.fn();
+    const handlers = { waiting, start: vi.fn(), action: vi.fn(), failure: vi.fn() };
+    const first = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    createPeer.mockReturnValue(first);
+    const room = openRoom(defaultPlayers[0], null, handlers);
+    first.emit('open');
+    const [code, token] = waiting.mock.calls[0];
+    room.close();
+    const next = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    createPeer.mockReturnValue(next);
+    openRoom(defaultPlayers[0], null, handlers, { code, token });
+    expect(createPeer).toHaveBeenLastCalledWith('chrisawad-tic-tac-toe-v1-' + code, { token });
+    next.emit('open');
+    expect(waiting).toHaveBeenLastCalledWith(code, token);
   });
 });
