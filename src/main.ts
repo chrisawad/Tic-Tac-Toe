@@ -446,16 +446,14 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-dialog]
   button.addEventListener('click', () => element<HTMLDialogElement>(button.dataset.dialog + '-dialog').showModal());
 }
 async function shareGame() {
-  const url = new URL(import.meta.env.BASE_URL, document.baseURI).href;
   if (navigator.share) {
     try {
-      await navigator.share({ title: document.title, url });
+      await navigator.share({ title: document.title, url: gameLink.value });
       return;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
     }
   }
-  gameLink.value = url;
   element('share-game-status').textContent = '';
   shareGameDialog.showModal();
   gameLink.select();

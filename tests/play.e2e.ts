@@ -3,6 +3,7 @@ import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
 const square = (page: Page, index: number) => page.getByRole('button', { name: new RegExp('^Square ' + (index + 1) + ',') });
 const name = (page: Page, slot: 'one' | 'two') => page.locator('#name-' + slot);
 const mode = (page: Page, value: 'ai' | 'local' | 'online') => page.locator('[data-mode="' + value + '"]');
+const publicGameUrl = 'https://chrisawad.github.io/Tic-Tac-Toe/';
 
 const dismissInstall = (page: Page) => page.getByRole('button', { name: 'Not now' }).click();
 
@@ -335,7 +336,7 @@ test('short landscape screens fit the menu, board and rematch through rotation',
   await expect(page.locator('#round-counter')).toHaveText('Round 2');
 });
 
-test('Share game opens the native sheet with the home link from setup, home, play and the result', async ({ page, baseURL }) => {
+test('Share game opens the native sheet with the public link from setup, home, play and the result', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'share', {
     value: async (data: ShareData) => { document.documentElement.dataset.shared = data.url; },
   }));
@@ -346,7 +347,7 @@ test('Share game opens the native sheet with the home link from setup, home, pla
     await expect(share).toBeInViewport({ ratio: 1 });
     await page.locator('html').evaluate(html => { delete html.dataset.shared; });
     await share.click();
-    await expect(page.locator('html')).toHaveAttribute('data-shared', new URL('./', baseURL).href);
+    await expect(page.locator('html')).toHaveAttribute('data-shared', publicGameUrl);
   }
   await checkShare();
   await page.getByRole('button', { name: 'All modes' }).click();
@@ -359,8 +360,20 @@ test('Share game opens the native sheet with the home link from setup, home, pla
   await checkShare();
   // An available update can put all four toolbar actions on screen at once.
   await page.locator('#update-button').evaluate(button => { (button as HTMLButtonElement).hidden = false; });
-  for (const [width, height] of [[320, 568], [480, 320], [568, 320]]) {
+  for (const [width, height] of [[1440, 900], [320, 568], [390, 844], [480, 320], [568, 320]]) {
     await page.setViewportSize({ width, height });
+    const share = page.getByRole('banner').getByRole('button', { name: 'Share game' });
+    const icon = share.locator('svg');
+    const label = share.getByText('Share', { exact: true });
+    await expect(icon).toBeInViewport({ ratio: 1 });
+    await expect(icon.locator('circle')).toHaveCount(3);
+    await expect(icon.locator('line, path')).toHaveCount(2);
+    await expect(label).toBeInViewport({ ratio: 1 });
+    const iconBox = (await icon.boundingBox())!;
+    const labelBox = (await label.boundingBox())!;
+    expect(iconBox.x + iconBox.width).toBeLessThan(labelBox.x);
+    expect(Math.abs(iconBox.y + iconBox.height / 2 - labelBox.y - labelBox.height / 2)).toBeLessThan(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     const controls = page.locator('.toolbar button:visible');
     for (const control of await controls.all()) {
       await expect(control).toBeInViewport({ ratio: 1 });
@@ -372,7 +385,7 @@ test('Share game opens the native sheet with the home link from setup, home, pla
   await checkShare(page.locator('#result-dialog'));
 });
 
-test('Share game handles cancellation, clipboard copying and manual copying', async ({ page, baseURL }) => {
+test('Share game handles cancellation, clipboard copying and manual copying', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'share', { configurable: true, value: async () => { throw new DOMException('Cancelled', 'AbortError'); } });
     Object.defineProperty(navigator, 'clipboard', { value: {
@@ -390,10 +403,9 @@ test('Share game handles cancellation, clipboard copying and manual copying', as
   await page.evaluate(() => { Object.defineProperty(navigator, 'share', { value: undefined }); });
   await share.click();
   const link = dialog.getByLabel('Game link');
-  const url = new URL('./', baseURL).href;
-  await expect(link).toHaveValue(url);
+  await expect(link).toHaveValue(publicGameUrl);
   await dialog.getByRole('button', { name: 'Copy link' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-copied', url);
+  await expect(page.locator('html')).toHaveAttribute('data-copied', publicGameUrl);
   await expect(dialog.getByRole('status')).toHaveText('Game link copied.');
   await page.locator('html').evaluate(html => { html.dataset.denyCopy = 'true'; });
   await dialog.getByRole('button', { name: 'Copy link' }).click();
@@ -461,7 +473,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   const invite = await page.locator('#invite-link').inputValue();
   expect([...new URL(invite).searchParams.keys()]).toEqual(['room']);
   await page.getByRole('button', { name: 'Share game' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-shared', new URL('./', invite).href);
+  await expect(page.locator('html')).toHaveAttribute('data-shared', publicGameUrl);
   await page.locator('#share-room').click();
   await expect(page.locator('html')).toHaveAttribute('data-shared', invite);
   await signaling!.close({ code: 1001, reason: 'Connection interrupted' });

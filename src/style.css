@@ -450,15 +450,16 @@ dialog form { margin-top: 23px; }
   .brand { font-size: 1.07rem; gap: 7px; }
   .brand-icon { width: 35px; height: 34px; padding: 4px; }
   .toolbar { gap: 6px; }
-  .install-button { padding-inline: 10px; font-size: .86rem; }
+  .share-button, .install-button { padding-inline: 10px; font-size: .86rem; }
+  .share-button { flex: none; gap: 5px; }
   .topbar-inner:has(#update-button:not([hidden])) .brand > :last-child { display: none; }
-  .toolbar:has(#update-button:not([hidden])) :is(#install-button, #install-help-button) {
+  .toolbar:has(#update-button:not([hidden])) .install-button {
     width: 44px;
     padding: 0;
     gap: 0;
     font-size: 0;
   }
-  .toolbar:has(#update-button:not([hidden])) :is(#install-button, #install-help-button) svg {
+  .toolbar:has(#update-button:not([hidden])) .install-button svg {
     display: block;
     width: 18px;
     height: 18px;
@@ -522,8 +523,11 @@ dialog form { margin-top: 23px; }
   .score-grid dd { font-size: 1.2rem; }
 }
 
-@media (max-width: 370px) {
+@media (max-width: 410px) {
   .topbar-inner:has(.install-button:not([hidden])) .brand > :last-child { display: none; }
+}
+
+@media (max-width: 370px) {
   .shell { width: calc(100% - 26px); }
   .toolbar { gap: 5px; }
   .install-button svg { display: none; }
