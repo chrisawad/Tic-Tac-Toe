@@ -22,11 +22,16 @@ export function setupInstall(
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
   const confirm = dialog.querySelector<HTMLButtonElement>('#install-confirm')!;
   const steps = dialog.querySelector<HTMLElement>('#install-steps')!;
+  const title = dialog.querySelector<HTMLElement>('#install-title')!;
+  const dismiss = dialog.querySelector<HTMLButtonElement>('#install-dismiss')!;
+  const benefit = dialog.querySelector<HTMLElement>('#install-benefit')!;
+  const copyStatus = dialog.querySelector<HTMLElement>('#install-copy-status')!;
   const storageKey = 'ttt:installed';
   let pending: NativeInstall | undefined;
   let installed = false;
   let checked = false;
   let offered = false;
+  let readingHelp = false;
   let related = false;
   let busy = false;
   let nativeFailed = false;
@@ -40,19 +45,26 @@ export function setupInstall(
       else localStorage.removeItem(storageKey);
     } catch { /* In-memory detection still works. */ }
   }
-  function offer() {
+  function openDialog(manual: boolean) {
     offered = true;
+    readingHelp = manual;
+    title.textContent = manual ? 'How to install' : 'Install Tic Tac Toe';
+    dismiss.textContent = manual ? 'Done' : 'Not now';
+    benefit.hidden = manual;
+    copyStatus.textContent = '';
+    steps.hidden = !manual && canInstall();
     if (!dialog.open) dialog.showModal();
   }
 
   function reflect() {
-    const standalone = installed || related || display.matches || nav.standalone === true;
-    install.hidden = standalone || !canInstall();
-    help.hidden = standalone || canInstall();
-    confirm.hidden = !canInstall();
-    steps.hidden = canInstall();
-    if (standalone && dialog.open) dialog.close();
-    else if (offerOnLaunch && update.hidden && checked && !standalone && !offered) offer();
+    const standalone = display.matches || nav.standalone === true;
+    const alreadyInstalled = standalone || installed || related;
+    install.hidden = alreadyInstalled || !canInstall();
+    help.hidden = standalone;
+    confirm.hidden = install.hidden;
+    steps.hidden = !readingHelp && canInstall();
+    if (alreadyInstalled && dialog.open && !readingHelp) dialog.close();
+    else if (offerOnLaunch && update.hidden && checked && !alreadyInstalled && !offered) openDialog(false);
   }
   async function checkRelated() {
     if (!isSecureContext || !nav.getInstalledRelatedApps) return;
@@ -121,19 +133,50 @@ export function setupInstall(
       if (wasFocused && install.hidden && !help.hidden) help.focus();
     }
   }
-  steps.textContent = installSteps();
+  const instructions = installInstructions();
+  if (!isSecureContext) instructions.steps.unshift('Copy the secure game link below and open it in your browser.');
+  dialog.querySelector('#install-directions')!.replaceChildren(...instructions.steps.map(text => {
+    const item = document.createElement('li');
+    item.textContent = text;
+    return item;
+  }));
+  dialog.querySelector<HTMLElement>('#install-launch')!.textContent = instructions.launch;
+  dialog.querySelector<HTMLElement>('#install-copy')!.hidden = isSecureContext && !instructions.copyLink;
   install.addEventListener('click', requestInstall);
   confirm.addEventListener('click', requestInstall);
-  help.addEventListener('click', offer);
+  help.addEventListener('click', () => openDialog(true));
   displayChanged();
   void checkRelated().then(() => { checked = true; reflect(); });
   setupUpdates(update, dialog, beforeUpdateReload);
 }
 
-function installSteps() {
-  if (!isSecureContext) return 'Open the HTTPS version of the game to install it.';
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  return ios
-    ? 'In Safari, open Share, choose Add to Home Screen, and tap Add. Turn on Open as Web App if your version offers it.'
-    : 'Open your browser’s menu and look for Install Tic Tac Toe, Add to Home Screen, or Add to Dock.';
+function installInstructions() {
+  const ua = navigator.userAgent;
+  if (/Android/i.test(ua)) return {
+    steps: [
+      'If the game opened inside another app, open its ⋮ menu and tap Open in Chrome or Open in browser. Choose Chrome if asked.',
+      'If that option is missing, copy the game link below, open Chrome, and paste it into the address bar.',
+      'In Chrome, tap ⋮ and choose Install app or Add to Home screen. Some versions show Install and create shortcut. Follow the prompts.',
+    ],
+    launch: 'Already installed? Swipe up on your Android home screen to open the app drawer. Search for Tic Tac Toe and tap its icon.',
+    copyLink: true,
+  };
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return {
+    steps: [
+      'Open the game in Safari. If you’re inside another app, copy the game link below and paste it into Safari.',
+      'Tap Share, then Add to Home Screen. Turn on Open as Web App if available, then tap Add.',
+    ],
+    launch: 'Already installed? Tap Tic Tac Toe on your Home Screen or search for it in the App Library.',
+    copyLink: true,
+  };
+  if (/Mac/.test(navigator.platform) && /Safari\//.test(ua) && !/Chrom(?:e|ium)\//.test(ua)) return {
+    steps: ['In Safari, open the File menu, choose Add to Dock, then click Add.'],
+    launch: 'Already installed? Open Tic Tac Toe from the Dock or search for it in Spotlight.',
+    copyLink: false,
+  };
+  return {
+    steps: ['Open the game in Chrome or Edge. Choose the install icon in the address bar, or open the browser menu and look for the option to install this page as an app.'],
+    launch: 'Already installed? Search for Tic Tac Toe in your computer’s apps and open it.',
+    copyLink: true,
+  };
 }

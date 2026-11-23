@@ -194,7 +194,8 @@ test('install popup opens on launch, calls the native prompt, and stays hidden a
   await expect(page.locator('html')).toHaveAttribute('data-install', 'true');
   await expect(dialog).toBeHidden();
   await page.reload();
-  await expect(page.getByRole('button', { name: /install/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Install app', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'How to install' })).toBeVisible();
   await expect(dialog).toBeHidden();
 });
 
@@ -211,6 +212,11 @@ test('Chromium install fallback honors a declined prompt', async ({ page }) => {
     });
     window.dispatchEvent(event);
   });
+  await page.getByRole('button', { name: 'How to install' }).click();
+  const guide = page.getByRole('dialog', { name: 'How to install' });
+  await expect(guide.locator('#install-steps')).toBeVisible();
+  await expect(guide.getByRole('button', { name: 'Install app' })).toBeVisible();
+  await guide.getByRole('button', { name: 'Done' }).click();
   await page.locator('#install-button').click();
   await expect(page.locator('html')).toHaveAttribute('data-install', 'true');
   await expect(page.locator('#install-button')).toBeHidden();
@@ -232,9 +238,10 @@ test('manual install instructions stay accessible from the toolbar and return on
   await expect(dialog).toContainText('Add to Home Screen');
   await page.keyboard.press('Escape');
   await mode(page, 'online').click();
-  await page.getByRole('button', { name: 'Install app' }).click();
-  await expect(dialog).toBeVisible();
-  await dismissInstall(page);
+  const help = page.getByRole('dialog', { name: 'How to install' });
+  await page.getByRole('button', { name: 'How to install' }).click();
+  await expect(help).toContainText('Safari');
+  await help.getByRole('button', { name: 'Done' }).click();
   await expect(page.locator('#setup-title')).toBeVisible();
   await page.reload();
   await expect(dialog).toBeVisible();
@@ -243,28 +250,47 @@ test('manual install instructions stay accessible from the toolbar and return on
   await expect(page.locator('#join-code')).toHaveValue('ABC23');
   await page.locator('#join-code').click();
   await expect(dialog).toBeHidden();
-  await page.getByRole('button', { name: 'Install app' }).click();
-  await expect(dialog).toContainText('Add to Home Screen');
-  await dismissInstall(page);
+  await page.getByRole('button', { name: 'How to install' }).click();
+  await expect(help).toContainText('Add to Home Screen');
+  await help.getByRole('button', { name: 'Done' }).click();
   await expect(page.locator('#join-code')).toHaveValue('ABC23');
 });
 
-test('an existing related app skips the install popup in a browser tab', async ({ page }) => {
-  await page.addInitScript(() => {
-    window.addEventListener('beforeinstallprompt', event => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    });
-    Object.defineProperty(navigator, 'getInstalledRelatedApps', {
-      value: async () => [{ platform: 'webapp', url: new URL('manifest.webmanifest', location.href).href }],
-    });
+for (const installed of [false, true]) {
+  test(`Android in-app install help works with ${installed ? 'a positive installed signal' : 'no native prompt'}`, async ({ page, context }) => {
+    await page.addInitScript(value => {
+      Object.defineProperty(navigator, 'install', { value: undefined });
+      Object.defineProperty(navigator, 'userAgent', { value: 'Mozilla/5.0 (Linux; Android 16; Pixel; wv)' });
+      Object.defineProperty(navigator, 'getInstalledRelatedApps', {
+        value: async () => value ? [{ platform: 'webapp', url: new URL('manifest.webmanifest', location.href).href }] : [],
+      });
+      window.addEventListener('beforeinstallprompt', event => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      });
+    }, installed);
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.goto('./');
+    if (!installed) {
+      await expect(page.getByRole('dialog', { name: 'Install Tic Tac Toe' })).toContainText('Open in Chrome');
+      await dismissInstall(page);
+    }
+    await expect(page.locator('#install-button')).toBeHidden();
+    await expect(page.locator('#install-dialog')).toBeHidden();
+    const trigger = page.getByRole('button', { name: 'How to install' });
+    await trigger.click();
+    const help = page.getByRole('dialog', { name: 'How to install' });
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    for (const text of ['Open in Chrome', 'paste it into the address bar', 'Add to Home screen', 'app drawer', 'Search for Tic Tac Toe'])
+      await expect(help).toContainText(text);
+    await expect(help.getByLabel('Game link')).toHaveValue(publicGameUrl);
+    await help.getByRole('button', { name: 'Copy link' }).click();
+    await expect(help.getByRole('status')).toHaveText('Game link copied.');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(publicGameUrl);
+    await help.getByRole('button', { name: 'Done' }).click();
+    await expect(trigger).toBeFocused();
   });
-  await page.goto('./');
-  await expect(page.locator('#install-help-button')).toBeHidden();
-  await expect(page.locator('#install-button')).toBeHidden();
-  await expect(page.locator('#install-dialog')).toBeHidden();
-  await mode(page, 'local').click();
-});
+}
 
 test('standalone display hides the install affordance', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });

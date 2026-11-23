@@ -573,19 +573,24 @@ async function shareGame() {
 for (const button of document.querySelectorAll('[data-share-game]')) {
   button.addEventListener('click', shareGame);
 }
-async function copyGameLink() {
-  const status = element('share-game-status');
-  try {
-    await navigator.clipboard.writeText(gameLink.value);
-    status.textContent = 'Game link copied.';
-  } catch {
-    gameLink.focus();
-    gameLink.select();
-    status.textContent = 'Copy the selected link to share the game.';
+function enableGameLinkCopy(link: HTMLInputElement, button: HTMLElement, status: HTMLElement) {
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link.value);
+      status.textContent = 'Game link copied.';
+    } catch {
+      link.focus();
+      link.select();
+      status.textContent = 'Copy the selected link.';
+    }
   }
+  if ('commandForElement' in HTMLButtonElement.prototype) link.addEventListener('command', copy);
+  else button.addEventListener('click', copy);
 }
-if ('commandForElement' in HTMLButtonElement.prototype) gameLink.addEventListener('command', copyGameLink);
-else element('copy-game-link').addEventListener('click', copyGameLink);
+enableGameLinkCopy(gameLink, element('copy-game-link'), element('share-game-status'));
+const installLink = element<HTMLInputElement>('install-game-link');
+installLink.value = gameLink.value;
+enableGameLinkCopy(installLink, element('copy-install-link'), element('install-copy-status'));
 
 element('room-back').addEventListener('click', exitOnline);
 element('sound-button').addEventListener('click', () => {
