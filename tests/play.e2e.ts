@@ -1,9 +1,9 @@
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { openPublicLink, publicGameUrl, publicInvite } from './invite-links';
 
 const square = (page: Page, index: number) => page.getByRole('button', { name: new RegExp('^Square ' + (index + 1) + ',') });
 const name = (page: Page, slot: 'one' | 'two') => page.locator('#name-' + slot);
 const mode = (page: Page, value: 'ai' | 'local' | 'online') => page.locator('[data-mode="' + value + '"]');
-const publicGameUrl = 'https://chrisawad.github.io/Tic-Tac-Toe/';
 
 const dismissInstall = (page: Page) => page.getByRole('button', { name: 'Not now' }).click();
 
@@ -132,8 +132,9 @@ test('T-3PO replies, sound preference persists, keyboard navigates the board', a
   await expect(page.getByRole('button', { name: /Square \d, O/ })).toHaveCount(1);
 });
 
-test('manifest, icons, install eligibility, and offline play under the Pages scope', async ({ page, context }) => {
-  await page.goto('./');
+test('manifest, icons, install eligibility, and offline play under the Pages scope', async ({ page, context, baseURL }) => {
+  await openPublicLink(page, publicGameUrl, baseURL!);
+  await expect(page).toHaveURL(baseURL!);
   await page.evaluate(async () => {
     await Promise.race([
       navigator.serviceWorker.ready,
@@ -152,13 +153,14 @@ test('manifest, icons, install eligibility, and offline play under the Pages sco
       return response.ok && response.headers.get('content-type')?.includes('image/png');
     }));
     return {
+      id: new URL(manifest.id, link.href).href,
       start: new URL(manifest.start_url, link.href).href,
       scope: new URL(manifest.scope, link.href).href,
       display: manifest.display, icons,
       worker: navigator.serviceWorker.controller?.scriptURL,
     };
   });
-  expect(details).toMatchObject({ start: page.url(), scope: page.url(), display: 'standalone', icons: [true, true, true], worker: new URL('sw.js', page.url()).href });
+  expect(details).toMatchObject({ id: baseURL, start: baseURL, scope: baseURL, display: 'standalone', icons: [true, true, true], worker: new URL('sw.js', page.url()).href });
   await context.setOffline(true);
   await startLocal(page);
   await square(page, 0).click();
@@ -433,6 +435,9 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
   await expect(page.locator('#install-dialog')).toBeHidden();
   await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
+  await page.evaluate(() => { location.hash = 'room=DEF45'; });
+  await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('DEF45');
+  await expect(page.locator('#install-dialog')).toBeHidden();
 });
 
 test('offline invite explains the network failure and preserves a valid code', async ({ page, context }) => {
@@ -471,7 +476,8 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
-  expect([...new URL(invite).searchParams.keys()]).toEqual(['room']);
+  const code = await page.locator('#room-code').innerText();
+  expect(invite).toBe(publicInvite(code));
   await page.getByRole('button', { name: 'Share game' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-shared', publicGameUrl);
   await page.locator('#share-room').click();
@@ -491,7 +497,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await expect(restored.locator('#room-status')).toContainText('Waiting for a friend');
   await expect(restored.locator('#invite-link')).toHaveValue(invite);
   await expect(restored.locator('#install-dialog')).toBeHidden();
-  expect(registrations).toEqual(Array(4).fill('chrisawad-tic-tac-toe-v2-room-' + new URL(invite).searchParams.get('room')));
+  expect(registrations).toEqual(Array(4).fill('chrisawad-tic-tac-toe-v2-room-' + code));
   await restored.locator('#room-back').click();
   await restored.reload();
   await expect(restored.locator('#home')).toBeVisible();
@@ -546,7 +552,7 @@ const testWorker = testRelay && process.env.TEST_TURN_WORKER_URL;
 const retryThroughRelay = Boolean(testWorker) || liveRelay;
 const routeTest = retryThroughRelay ? 'a failed first connection automatically recovers through the relay'
   : requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server';
-test(routeTest, async ({ page, playwright, isMobile }) => {
+test(routeTest, async ({ page, playwright, isMobile, baseURL }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
   test.setTimeout(65_000);
   const secondBrowser = await playwright.chromium.launch();
@@ -586,7 +592,7 @@ test(routeTest, async ({ page, playwright, isMobile }) => {
     await mode(page, 'online').click();
     await page.getByRole('button', { name: 'Create private room' }).click();
     await expect(page.locator('#room-qr')).toBeVisible();
-    await guest.goto(await page.locator('#invite-link').inputValue());
+    await openPublicLink(guest, await page.locator('#invite-link').inputValue(), baseURL!);
     await guest.getByRole('button', { name: 'Join room' }).click();
     if (retryThroughRelay) await expect(guest.locator('#room-status')).toContainText('Retrying through the backup relay');
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
@@ -621,7 +627,7 @@ test('real online room carries a game and rematch between two browser contexts',
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
   const sharedCode = (await code.textContent())!;
-  expect(invite).toBe(new URL('?room=' + sharedCode, baseURL).href);
+  expect(invite).toBe(publicInvite(sharedCode));
   const hostTab = await page.context().newCDPSession(page);
   await page.context().setOffline(true);
   await expect(page.locator('#room-status')).toContainText('back online');
@@ -629,7 +635,7 @@ test('real online room carries a game and rematch between two browser contexts',
   const guest = await browser.newPage();
   let staleSocket: WebSocket | undefined;
   try {
-    await guest.goto(invite);
+    await openPublicLink(guest, invite, baseURL!);
     await expect(guest.locator('#install-dialog')).toBeHidden();
     await expect(guest.locator('#join-code')).toHaveValue(sharedCode);
     await name(guest, 'one').fill('Guest');

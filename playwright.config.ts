@@ -28,6 +28,7 @@ export default defineConfig({
     command: (isolated ? vite + ' build --outDir .qa/online && ' : '') +
       vite + ' preview --host 127.0.0.1 --port 4317 --strictPort' + (isolated ? ' --outDir .qa/online' : ''),
     env: isolated ? { VITE_PEER_HOST: '127.0.0.1', VITE_PEER_PORT: '9117', VITE_PEER_SECURE: 'false', VITE_TURN_WORKER_URL: '' } : {},
+    timeout: 180_000,
     url: local,
     reuseExistingServer: false,
   }],

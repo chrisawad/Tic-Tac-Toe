@@ -1,6 +1,6 @@
 # Tic Tac Toe
 
-Play [Tic Tac Toe on GitHub Pages](https://chrisawad.github.io/Tic-Tac-Toe/).
+Play [Tic Tac Toe](https://tictactoe.chrisawad.com/).
 
 - **AI Battle** — play T-3PO on Easy, Medium, or Hard. Hard uses minimax and plays an optimal game.
 - **Local PvP** — pick names and colors and pass the screen between turns.

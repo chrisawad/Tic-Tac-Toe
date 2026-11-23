@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { inviteURL, readInviteCode } from '../src/multiplayer';
+import { inviteURL, readInviteCode, setInviteCode } from '../src/multiplayer';
 import { createLobbyStore } from '../src/multiplayer/lobby-store';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -9,6 +9,19 @@ it('shares only the game path and room code and reads invites from another game 
   expect(link).toBe('https://games.example/counter/?room=ABC23');
   expect(readInviteCode(new URL(link.toLowerCase()))).toBe('ABC23');
   expect(readInviteCode(new URL('https://games.example/counter/?room=00000'))).toBeNull();
+});
+
+it('carries a branded room through forwarding and clears it on exit', () => {
+  const link = inviteURL('ABC23', 'https://tictactoe.chrisawad.com/', 'fragment');
+  expect(link).toBe('https://tictactoe.chrisawad.com/#room=ABC23');
+  const destination = new URL('https://chrisawad.github.io/Tic-Tac-Toe/?room=DEF45#room=abc23');
+  expect(readInviteCode(destination)).toBe('ABC23');
+  setInviteCode(destination, 'LMN45');
+  expect(destination.search).toBe('');
+  expect(destination.hash).toBe('#room=LMN45');
+  setInviteCode(destination, null);
+  expect(readInviteCode(destination)).toBeNull();
+  expect(destination.hash).toBe('');
 });
 
 it('isolates saved host rooms for games on one origin even when the visible room codes match', () => {

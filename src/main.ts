@@ -11,7 +11,7 @@ import {
   type Color, type Difficulty, type Match, type Mode, type Player, type PlayerIndex,
 } from './game';
 import { setupInstall } from './install';
-import { createMultiplayer, createInviteControls, isRoomCode, NoHostReply, readInviteCode } from './multiplayer';
+import { createMultiplayer, createInviteControls, inviteURL, inviteValue, isRoomCode, NoHostReply, readInviteCode, setInviteCode } from './multiplayer';
 import { applyRoomMove, enter, feedback, readyForRematch, roomStore, savedRoom, ticTacToeOnline,
   type OnlineView, type RoundAction, type Session } from './online';
 import './style.css';
@@ -73,7 +73,8 @@ type Operation = Parameters<typeof enter>[0];
 const invitations = createInviteControls({
   code: element('room-code'), link: element('invite-link'), qr: element('room-qr'),
   copy: element('copy-room'), share: element('share-room'),
-}, { title: 'Play Tic Tac Toe', text: 'Join my Tic Tac Toe room.' }, () => notify('Invite link copied.'));
+}, { title: 'Play Tic Tac Toe', text: 'Join my Tic Tac Toe room.' }, () => notify('Invite link copied.'),
+  code => inviteURL(code, gameLink.value, 'fragment'));
 
 function notify(message: string) {
   element('notice').textContent = message;
@@ -448,8 +449,8 @@ const multiplayer = createMultiplayer(ticTacToeOnline, {
 
 function clearInviteURL() {
   const url = new URL(location.href);
-  if (!url.searchParams.has('room')) return;
-  url.searchParams.delete('room');
+  if (inviteValue(url) === null) return;
+  setInviteCode(url, null);
   history.replaceState(null, '', url);
 }
 
@@ -465,8 +466,8 @@ function showOnline(view: OnlineView, selected: Player) {
   onlineView = view;
   if (!previous) {
     const url = new URL(location.href);
-    if (url.searchParams.has('room') && url.searchParams.get('room') !== room.code) {
-      url.searchParams.set('room', room.code);
+    if (inviteValue(url) !== null && readInviteCode(url) !== room.code) {
+      setInviteCode(url, room.code);
       history.replaceState(null, '', url);
     }
   }
@@ -671,13 +672,17 @@ createIcons({
   attrs: { 'aria-hidden': 'true' },
 });
 updateSound();
+window.addEventListener('hashchange', event => {
+  const requested = inviteValue(new URL(event.newURL));
+  if (requested !== null && requested !== inviteValue(new URL(event.oldURL))) location.reload();
+});
 const url = new URL(location.href);
 const invited = readInviteCode(url);
-const hasInvite = url.searchParams.has('room');
+const hasInvite = inviteValue(url) !== null;
 const saved = !hasInvite || invited ? savedRoom(invited ?? undefined) : undefined;
 const waiting = roomStore.waitingHost.read();
 const restoreCode = saved?.room.code ?? (waiting && (!hasInvite || waiting.code === invited) ? waiting.code : '');
-if (hasInvite || restoreCode) openSetup('online', invited || url.searchParams.get('room') || '');
+if (hasInvite || restoreCode) openSetup('online', invited || inviteValue(url) || '');
 if (restoreCode) void openOnline('restore', saved?.room.players.player1 ?? waiting!.profile.player, restoreCode);
 else if (hasInvite && !invited) {
   setRoomRole('guest');
@@ -692,7 +697,7 @@ setupInstall(
       const code = joinCode.value.trim().toUpperCase();
       if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;
       const target = new URL(location.href);
-      target.searchParams.set('room', code);
+      setInviteCode(target, code);
       history.replaceState(null, '', target);
     },
   },

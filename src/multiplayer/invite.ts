@@ -10,16 +10,32 @@ export function createRoomCodes(length = 5) {
 }
 export const { isRoomCode, newRoomCode } = createRoomCodes();
 
-export function inviteURL(code: string, page = location.href) {
+export function inviteURL(code: string, page = location.href, placement: 'query' | 'fragment' = 'query') {
   const url = new URL(page);
   url.search = '';
   url.hash = '';
-  url.searchParams.set('room', code);
+  if (placement === 'fragment') url.hash = new URLSearchParams({ room: code }).toString();
+  else url.searchParams.set('room', code);
   return url.href;
 }
 
+export function inviteValue(url: URL) {
+  return new URLSearchParams(url.hash.slice(1)).get('room') ?? url.searchParams.get('room');
+}
+
+export function setInviteCode(url: URL, code: string | null) {
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  if (fragment.has('room')) {
+    if (code) fragment.set('room', code);
+    else fragment.delete('room');
+    url.hash = fragment.toString();
+    url.searchParams.delete('room');
+  } else if (code) url.searchParams.set('room', code);
+  else url.searchParams.delete('room');
+}
+
 export function readInviteCode(url: URL, codes = { isRoomCode }) {
-  const code = url.searchParams.get('room')?.toUpperCase() ?? '';
+  const code = inviteValue(url)?.toUpperCase() ?? '';
   return codes.isRoomCode(code) ? code : null;
 }
 
@@ -43,7 +59,7 @@ type InviteElements = {
   share: HTMLButtonElement;
 };
 
-export function createInviteControls(ui: InviteElements, share: { title: string; text: string }, copied: () => void) {
+export function createInviteControls(ui: InviteElements, share: { title: string; text: string }, copied: () => void, urlForCode = inviteURL) {
   const listeners = new AbortController();
   let current = '';
   async function copy() {
@@ -74,7 +90,7 @@ export function createInviteControls(ui: InviteElements, share: { title: string;
   }
   return {
     async show(code: string) {
-      const url = inviteURL(code);
+      const url = urlForCode(code);
       current = url;
       ui.code.textContent = code;
       ui.link.value = url;

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { expect, test, type Page } from '@playwright/test';
 import type jsQR from 'jsqr';
+import { openPublicLink, publicGameUrl, publicInvite } from './invite-links';
 
 const qrDecoder = createRequire(import.meta.url).resolve('jsqr');
 const button = (page: Page, name: string) => page.getByRole('button', { name, exact: true });
@@ -35,14 +36,14 @@ test('QR invite, scores, alternating X, both seats recover offline and leave', a
     await expect(h.locator('#room-qr')).toBeVisible({ timeout: 25_000 });
     const code = await h.locator('#room-code').innerText();
     expect(code).toMatch(/^[A-HJ-NP-Z2-9]{5}$/);
-    const invite = new URL('?room=' + code, baseURL).href;
+    const invite = publicInvite(code);
     await button(h, 'Copy link').click();
     expect(await h.evaluate(() => navigator.clipboard.readText())).toBe(invite);
     await h.evaluate(() => Object.defineProperty(navigator, 'share', {
       value: async (data: ShareData) => { document.documentElement.dataset.shared = data.url; },
     }));
     await button(h, 'Share game').click();
-    await expect(h.locator('html')).toHaveAttribute('data-shared', 'https://chrisawad.github.io/Tic-Tac-Toe/');
+    await expect(h.locator('html')).toHaveAttribute('data-shared', publicGameUrl);
     await button(h, 'Share invite').click();
     await expect(h.locator('html')).toHaveAttribute('data-shared', invite);
     await h.addScriptTag({ path: qrDecoder });
@@ -51,7 +52,9 @@ test('QR invite, scores, alternating X, both seats recover offline and leave', a
       return (window as unknown as { jsQR: typeof jsQR }).jsQR(pixels.data, pixels.width, pixels.height)?.data;
     });
     expect(scanned).toBe(invite);
-    await g.goto(scanned!);
+    await openPublicLink(g, scanned!, baseURL!);
+    const destination = new URL('#room=' + code, baseURL).href;
+    await expect(g).toHaveURL(destination);
     await expect(g.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
     await expect(g.locator('#join-code')).toHaveValue(code);
     await expect(g.getByRole('dialog')).toHaveCount(0);
@@ -105,7 +108,7 @@ test('QR invite, scores, alternating X, both seats recover offline and leave', a
     await h.goto(new URL('?room=' + otherCode, baseURL).href);
     await expect(h.locator('#join-code')).toHaveValue(otherCode);
     await button(h, 'Resume room').click();
-    await g.goto(invite);
+    await g.goto(destination);
     for (const page of [h, g]) {
       await expect(page.locator('#round-counter')).toHaveText('Round 2');
       await expect(cell(page, 4)).toHaveAttribute('data-mark', 'X');
@@ -192,7 +195,7 @@ test('typed private code, full room and original waiting-room invite', async ({ 
         });
       });
     }
-    await g.goto(await h.locator('#invite-link').inputValue());
+    await openPublicLink(g, await h.locator('#invite-link').inputValue(), baseURL!);
     await button(g, 'Join room').click();
     await Promise.all([connected(h), connected(g)]);
     await cell(h, 0).click();

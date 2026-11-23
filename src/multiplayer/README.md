@@ -48,6 +48,7 @@ Both devices receive `start` with profiles in host/guest order. The host occupie
 ## Invites and room lifetime
 
 - Use `inviteURL(code)` for a shareable URL and `readInviteCode(new URL(location.href))` on launch. A valid invite takes the player to your join screen. Otherwise call `session.restore()` to reopen a saved host lobby.
+- For a forwarding domain that redirects to a fixed game URL, pass `code => inviteURL(code, publicGameUrl, 'fragment')` as the fourth argument of `createInviteControls`. Copy, Share, and QR then use the same `#room=` link. The destination accepts both fragment and query invites.
 - For copy, native share, and a QR code, call `createInviteControls({ code, link, qr, copy, share }, { title, text }, onCopied)` with your own DOM elements. Call the returned `show(code)` inside `invite`, `clear()` when the lobby closes, and `dispose()` when unmounting.
 - The optional `opening(joinCode, restoring)`, `status(message)`, and `route(route)` callbacks drive your UI. Routes are `direct`, `relay`, or `unknown`. The module reads the selected ICE pair during gameplay.
 - `session.leave()` closes the room and clears the waiting-room record. `session.dispose()` also removes page lifecycle listeners. Waiting hosts can recover after app switching or a network interruption. A disconnection during an active match ends the session.
