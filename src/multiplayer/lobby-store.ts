@@ -1,7 +1,5 @@
 import { isRoomCode } from './invite';
-import type { HostedRoom } from './room';
-
-export type HostLobby<Profile> = HostedRoom & { profile: Profile };
+export type HostLobby<Profile> = { code: string; token?: string; profile: Profile };
 const maxAge = 2 * 60 * 60 * 1000;
 
 function storage() {
@@ -10,11 +8,11 @@ function storage() {
   return installed ? localStorage : sessionStorage;
 }
 
-export function createLobbyStore<Profile>(key: string, isProfile: (value: unknown) => value is Profile) {
+export function createLobbyStore<Profile>(key: string, isProfile: (value: unknown) => value is Profile, validCode = isRoomCode) {
   function read(): HostLobby<Profile> | null {
     try {
       const saved = JSON.parse(storage().getItem(key) ?? 'null');
-      if (saved && typeof saved.code === 'string' && isRoomCode(saved.code) && isProfile(saved.profile)
+      if (saved && typeof saved.code === 'string' && validCode(saved.code) && isProfile(saved.profile)
         && Number.isFinite(saved.savedAt) && Date.now() - saved.savedAt < maxAge) {
         // Older saves lack a credential. Reuse one across windows only with exclusive ownership.
         const token = navigator.locks && typeof saved.token === 'string' && /^[a-f0-9-]{36}$/i.test(saved.token)

@@ -255,7 +255,8 @@ svg.lucide { display: block; width: 1.1em; height: 1.1em; flex: none; }
 .setup-screen:has(.online-form) { max-width: 540px; }
 .online-form .setup-grid { grid-template-columns: minmax(0, 1fr); }
 #room-choice { margin: 22px 0 18px; }
-.room-switch { grid-template-columns: repeat(2, 1fr); }
+.room-switch { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.room-switch label span { text-align: center; }
 #code-field { margin-top: 14px; }
 #code-field input { margin-bottom: 0; }
 .online-form .setup-actions .primary { width: 100%; }

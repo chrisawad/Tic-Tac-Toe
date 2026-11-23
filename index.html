@@ -81,6 +81,7 @@
             <div class="difficulty-grid room-switch">
               <label><input type="radio" name="room-role" value="host" checked><span>Host a game</span></label>
               <label><input type="radio" name="room-role" value="guest"><span>Join a friend</span></label>
+              <label><input type="radio" name="room-role" value="public"><span>Public match</span></label>
             </div>
             <p id="room-hint" class="small-copy"></p>
             <div id="code-field" hidden>
@@ -112,7 +113,7 @@
       </section>
 
       <section id="room" class="inner-screen room-screen" aria-labelledby="room-title" hidden>
-        <button id="room-back" class="text-button back-button" type="button"><i data-lucide="arrow-left"></i> Player setup</button>
+        <button id="room-back" class="text-button back-button" type="button"><i data-lucide="arrow-left"></i> Leave room</button>
         <h1 id="room-title" class="screen-title" tabindex="-1">Online room</h1>
         <div class="panel lobby">
           <span class="profile-icon online-icon lobby-icon"><i data-lucide="radio"></i></span>
@@ -132,7 +133,7 @@
 
       <section id="game" class="inner-screen game-screen" aria-labelledby="game-title" hidden>
         <div class="game-heading">
-          <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> All modes</button>
+          <button class="text-button back-button" data-home type="button"><i data-lucide="arrow-left"></i> <span id="game-back-label">All modes</span></button>
           <span id="connection-route" role="status" aria-label="Multiplayer connection" hidden></span>
           <span id="round-counter" class="round-badge"></span>
           <button id="result-button" class="round-badge" type="button" aria-haspopup="dialog" aria-describedby="round-counter" hidden>Round result</button>
@@ -219,7 +220,7 @@
         <h2 id="result-title"></h2>
         <p id="result-detail"></p>
         <form method="dialog" class="dialog-actions">
-          <button class="button" value="menu">All modes</button>
+          <button class="button" id="result-menu" value="menu">All modes</button>
           <button id="rematch-button" class="button primary" value="rematch" autofocus><i data-lucide="rotate-ccw"></i> <span id="rematch-label">Rematch</span></button>
         </form>
       </div>

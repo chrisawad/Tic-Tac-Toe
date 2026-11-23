@@ -42,10 +42,16 @@ export function trackConnectionSetup(connection: DataConnection, host: boolean, 
   let networkConnected = false;
   let gatheredRelay = false;
   let relayIssue = '';
-  connection.on('open', () => { opened = true; });
-  connection.on('iceStateChanged', state => {
+  const onOpen = () => { opened = true; };
+  const onIceState = (state: RTCIceConnectionState) => {
     if (state === 'connected' || state === 'completed') networkConnected = true;
-  });
+  };
+  connection.on('open', onOpen);
+  connection.on('iceStateChanged', onIceState);
+  signal.addEventListener('abort', () => {
+    connection.off('open', onOpen);
+    connection.off('iceStateChanged', onIceState);
+  }, { once: true });
   pc.addEventListener('icecandidate', event => {
     if (event.candidate?.type === 'relay') gatheredRelay = true;
   }, { signal });

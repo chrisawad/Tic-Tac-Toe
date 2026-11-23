@@ -59,3 +59,49 @@ Both devices receive `start` with profiles in host/guest order. The host occupie
 Pass the public HTTPS credential Worker URL in `rules.relayUrl` to enable managed TURN. The module requests temporary credentials when hosting or joining and retains them in memory. Without that setting it uses the transport's default ICE configuration. A temporary credential-service outage still allows direct play.
 
 Games on the same GitHub Pages origin can use the same Worker. For games on different origins, configure the Worker's `GAME_ORIGINS` with a comma-separated list of exact origins, including the original game. The existing `GAME_ORIGIN` remains the default when the list is absent. Keep `TURN_KEY_ID` and `TURN_API_TOKEN` in the Worker’s secret settings.
+
+## Public matchmaking and resumable matches
+
+`createMultiplayer` keeps the existing Tic-Tac-Toe action protocol and five-character invites. Games that need public matchmaking or active-match recovery can use `createAuthoritativeMultiplayer`. In this mode the host checks moves and sends both players the resulting state. Use a separate versioned namespace when migrating a game to this protocol. Existing rooms can finish using their original client.
+
+The following game gives each player one turn to add a point. It uses a six-character invite and a single public queue.
+
+```ts
+import { createAuthoritativeMultiplayer, createRoomCodes, createRoomPersistence } from './multiplayer';
+
+type Profile = { name: string };
+type State = { points: number };
+const store = createRoomPersistence<Profile, null>({
+  namespace: 'my-studio-two-turns-v1',
+  codes: createRoomCodes(6),
+  isProfile: (p): p is Profile => !!p && typeof p === 'object' && 'name' in p && typeof p.name === 'string',
+  isSettings: (settings): settings is null => settings === null,
+});
+const rooms = createAuthoritativeMultiplayer<Profile, null, State, number>({
+  store,
+  queueKey: () => 'standard',
+  settings: () => null,
+  initial: () => ({ points: 0 }),
+  isState: (s): s is State => !!s && typeof s === 'object' && 'points' in s &&
+    typeof s.points === 'number' && Number.isInteger(s.points) && s.points >= 0 && s.points <= 2,
+  isMove: (move): move is number => move === 1,
+  apply: (s, move, seat) => s.points < 2 && seat === (s.points === 0 ? 'Player1' : 'Player2')
+    ? { points: s.points + move } : s,
+  revision: s => s.points,
+  finished: s => s.points === 2,
+});
+
+const session = await rooms.enter('public', { name: 'Amy' }, null);
+session.watch(view => console.log(view.room.code, view.room.state, view.route));
+// In response to the player's controls:
+// session.move(1);
+// session.rematch();
+// await session.leave();
+```
+
+- Use `enter('create', profile, settings)` for a private host, `enter('join', profile, settings, code)` for a guest, and `enter('public', profile, settings)` to find or host a public match. The host determines settings for invited players. For multiple queues, return a stable PeerJS-ID-safe string from `queueKey` for each group of compatible settings. Each operation accepts a final progress callback after the code.
+- On launch, use `store.readMatch()` to find the current tab’s room or the most recently saved active match on this device. When opening an invite, pass its code to `store.readMatch(code)` and `enter('restore', profile, settings, code)` so a different invitation opens normally. Joining by code also reuses a matching seat. A saved board opens offline and reconnects automatically. Both players must be connected to make a move.
+- Browsers with Web Locks can recover a match in a new window on the same origin and browser profile. Each seat has one owner. A frozen window releases its connection and lock, and a hidden window can hand its seat to a returning player. Other browsers retain same-tab recovery. An installed app can also reopen its unoccupied waiting host lobby for two hours via `store.waitingHost.read()`. `stop()` preserves a match for recovery. Explicit `leave()` clears that seat and informs a connected opponent.
+- `apply` must be pure, returning its input for an illegal move and a fresh state for an accepted one. `revision` must change after each accepted move. Guests send their round and revision with each move. Snapshots, moves, settings, and profiles must be JSON-serializable and fit into the 40,000-character message limit. The module adds a `connected` field to each player profile. `acceptGuest` can resolve choices such as conflicting player colors.
+- Each seat can vote once on a finished round. `view.room.rematchVotes` stores votes in host/guest order. The host starts the next round after both votes. Supply `advanceRound(previous)` to carry scores or alternate starting players. The default creates a fresh state with the same settings. In an existing compatible older room, `rematchRequester` identifies the designated seat when vote negotiation is unavailable.
+- Supply `relayUrl` and optional signaling `peerOptions` to the game adapter. The module reads neither environment variables nor another game's files. Use `createRoomFeedback(store.codes.length).roomFailure(error, operation)` for player-facing error text.

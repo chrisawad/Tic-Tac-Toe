@@ -18,11 +18,13 @@ export type Result = { mark: Mark; line: readonly number[] } | { mark: null };
 type Score = [number, number, number];
 type Board = (Mark | null)[];
 
-export interface Match {
-  players: [Player, Player];
+export interface Round {
   round: number;
   moves: number[];
   playedScores: Score;
+}
+export interface Match extends Round {
+  players: [Player, Player];
 }
 
 const lines = [
@@ -52,19 +54,19 @@ export function createMatch(players: [Player, Player]): Match {
   return { players, round: 1, moves: [], playedScores: [0, 0, 0] };
 }
 
-export function markFor(match: Match, index: PlayerIndex): Mark {
+export function markFor(match: Round, index: PlayerIndex): Mark {
   return index === (match.round - 1) % 2 ? 'X' : 'O';
 }
 
-export function playerFor(match: Match, mark: Mark): PlayerIndex {
+export function playerFor(match: Round, mark: Mark): PlayerIndex {
   return markFor(match, 0) === mark ? 0 : 1;
 }
 
-export function turn(match: Match): Mark {
+export function turn(match: Round): Mark {
   return match.moves.length % 2 === 0 ? 'X' : 'O';
 }
 
-export function boardFor(match: Match): Board {
+export function boardFor(match: Round): Board {
   const board: Board = Array(9).fill(null);
   match.moves.forEach((cell, i) => { board[cell] = i % 2 === 0 ? 'X' : 'O'; });
   return board;
@@ -79,41 +81,46 @@ export function resultFor(board: readonly (Mark | null)[]): Result | null {
   return board.every(Boolean) ? { mark: null } : null;
 }
 
-export function move(match: Match, index: number, actor: PlayerIndex): Match | null {
+export function move<T extends Round>(match: T, index: number, actor: PlayerIndex): T | null {
   if (!Number.isInteger(index) || index < 0 || index > 8 || match.moves.includes(index)
     || actor !== playerFor(match, turn(match)) || resultFor(boardFor(match))) return null;
   return { ...match, moves: [...match.moves, index] };
 }
 
-export function scoresFor(match: Match): Score {
+export function scoresFor(match: Round): Score {
   const scores: Score = [...match.playedScores];
   const result = resultFor(boardFor(match));
   if (result) scores[result.mark ? playerFor(match, result.mark) : 2]++;
   return scores;
 }
 
-export function nextRound(match: Match): Match {
+export function nextRound<T extends Round>(match: T): T {
   if (!resultFor(boardFor(match))) return match;
   return { ...match, round: match.round + 1, moves: [], playedScores: scoresFor(match) };
+}
+
+export function isRound(value: unknown): value is Round {
+  if (!value || typeof value !== 'object') return false;
+  const saved = value as Round;
+  if (!Number.isSafeInteger(saved.round) || saved.round < 1
+    || !Array.isArray(saved.moves) || saved.moves.length > 9
+    || !Array.isArray(saved.playedScores) || saved.playedScores.length !== 3
+    || !saved.playedScores.every(score => Number.isSafeInteger(score) && score >= 0)
+    || saved.playedScores.reduce((sum, score) => sum + score, 0) !== saved.round - 1) return false;
+  let round: Round = { ...saved, moves: [] };
+  for (const cell of saved.moves) {
+    const next = move(round, cell, playerFor(round, turn(round)));
+    if (!next) return false;
+    round = next;
+  }
+  return true;
 }
 
 export function restoreMatch(value: unknown): Match | null {
   if (!value || typeof value !== 'object') return null;
   const saved = value as Match;
-  if (!Array.isArray(saved.players) || saved.players.length !== 2 || !saved.players.every(isPlayer)
-    || !Number.isSafeInteger(saved.round) || saved.round < 1
-    || !Array.isArray(saved.moves) || saved.moves.length > 9
-    || !Array.isArray(saved.playedScores) || saved.playedScores.length !== 3
-    || !saved.playedScores.every(score => Number.isSafeInteger(score) && score >= 0)
-    || saved.playedScores.reduce((sum, score) => sum + score, 0) !== saved.round - 1) return null;
-
-  let match = { ...createMatch(saved.players), round: saved.round, playedScores: saved.playedScores };
-  for (const cell of saved.moves) {
-    const next = move(match, cell, playerFor(match, turn(match)));
-    if (!next) return null;
-    match = next;
-  }
-  return match;
+  return Array.isArray(saved.players) && saved.players.length === 2 && saved.players.every(isPlayer)
+    && isRound(saved) ? saved : null;
 }
 
 function freeCells(board: Board) {

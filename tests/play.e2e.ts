@@ -418,10 +418,10 @@ test('Share game handles cancellation, clipboard copying and manual copying', as
 test('online setup keeps host and join actions distinct and routes invites to Join', async ({ page }) => {
   await visit(page);
   await mode(page, 'online').click();
-  await expect(page.getByRole('button', { name: 'Create a room' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create private room' })).toBeVisible();
   await expect(page.getByLabel('Room code', { exact: true })).toBeHidden();
   await page.getByText('Join a friend', { exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Create a room' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Create private room' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Join room' }).click();
   await expect(page.locator('#join-error')).toContainText('five-character');
   await expect(page.locator('#join-code')).toBeFocused();
@@ -468,7 +468,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await page.goto('./');
   if (!isMobile) await dismissInstall(page);
   await mode(page, 'online').click();
-  await page.getByRole('button', { name: 'Create a room' }).click();
+  await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
   expect([...new URL(invite).searchParams.keys()]).toEqual(['room']);
@@ -491,7 +491,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await expect(restored.locator('#room-status')).toContainText('Waiting for a friend');
   await expect(restored.locator('#invite-link')).toHaveValue(invite);
   await expect(restored.locator('#install-dialog')).toBeHidden();
-  expect(registrations).toEqual(Array(4).fill('chrisawad-tic-tac-toe-v1-' + new URL(invite).searchParams.get('room')));
+  expect(registrations).toEqual(Array(4).fill('chrisawad-tic-tac-toe-v2-room-' + new URL(invite).searchParams.get('room')));
   await restored.locator('#room-back').click();
   await restored.reload();
   await expect(restored.locator('#home')).toBeVisible();
@@ -506,7 +506,7 @@ test('opening a second installed window preserves the waiting room in the origin
   });
   await page.goto('./');
   await mode(page, 'online').click();
-  await page.getByRole('button', { name: 'Create a room' }).click();
+  await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
   const invite = await page.locator('#invite-link').inputValue();
   const other = await context.newPage();
@@ -534,7 +534,7 @@ test('an older saved room with an occupied code offers a new invite immediately'
   await page.reload();
   await expect(page.locator('#join-error')).toContainText('create a new room and share its new invite');
   expect(attempts).toBe(1);
-  await page.getByRole('button', { name: 'Create a room' }).click();
+  await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
   await expect(page.locator('#room-code')).not.toHaveText('ABC23');
 });
@@ -584,7 +584,7 @@ test(routeTest, async ({ page, playwright, isMobile }) => {
     }
     await visit(page);
     await mode(page, 'online').click();
-    await page.getByRole('button', { name: 'Create a room' }).click();
+    await page.getByRole('button', { name: 'Create private room' }).click();
     await expect(page.locator('#room-qr')).toBeVisible();
     await guest.goto(await page.locator('#invite-link').inputValue());
     await guest.getByRole('button', { name: 'Join room' }).click();
@@ -614,7 +614,7 @@ test('real online room carries a game and rematch between two browser contexts',
   await mode(page, 'online').click();
   await name(page, 'one').fill('Host');
   const registration = page.waitForEvent('websocket', socket => new URL(socket.url()).searchParams.has('token'));
-  await page.getByRole('button', { name: 'Create a room' }).click();
+  await page.getByRole('button', { name: 'Create private room' }).click();
   const registrationUrl = (await registration).url();
   const code = page.locator('#room-code');
   await expect(code).toHaveText(/^[A-Z2-9]{5}$/, { timeout: 24000 });
@@ -635,7 +635,7 @@ test('real online room carries a game and rematch between two browser contexts',
     await name(guest, 'one').fill('Guest');
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });
     await guest.getByRole('button', { name: 'Join room' }).click();
-    await expect(guest.locator('#room-status')).toContainText('Waiting for room', { timeout: 24000 });
+    await expect(guest.locator('#room-status')).toContainText('Waiting for the host', { timeout: 24000 });
     // Keep this test host's registration occupied, as if its phone lost the socket
     // without the service noticing. It stays registered while the host resumes.
     staleSocket = new WebSocket(registrationUrl);
@@ -670,9 +670,9 @@ test('real online room carries a game and rematch between two browser contexts',
     await expect(page.locator('#round-counter')).toHaveText('Round 2');
     await expect(guest.locator('#score dd')).toHaveText(['1', '0', '0']);
     expect(await playerColors(guest)).toEqual(assigned);
-    await guest.getByRole('button', { name: 'All modes' }).click();
+    await guest.getByRole('button', { name: 'Leave room' }).click();
     await guest.getByRole('button', { name: 'Leave room', exact: true }).click();
-    await expect(page.locator('#join-error')).toHaveText('Your opponent left the room.');
+    await expect(page.locator('#join-error')).toContainText('Your opponent left the room.');
   } finally {
     staleSocket?.close();
     await guest.close();

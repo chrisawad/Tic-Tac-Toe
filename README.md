@@ -4,7 +4,7 @@ Play [Tic Tac Toe on GitHub Pages](https://chrisawad.github.io/Tic-Tac-Toe/).
 
 - **AI Battle** — play T-3PO on Easy, Medium, or Hard. Hard uses minimax and plays an optimal game.
 - **Local PvP** — pick names and colors and pass the screen between turns.
-- **Play Online** — host a room and share its code, link, or QR invite. Rematches start when both players are ready.
+- **Play Online** — create a private room, join a five-character invite, or find a public 3×3 match. Both players vote for a rematch. The score carries over and the other player takes X.
 
 On a rematch, players swap X and O while keeping their chosen colors and match scores. AI Battle and Local PvP save independently on the device and work offline after the first visit. Choose **Install app** for a standalone window or home-screen app.
 
@@ -23,7 +23,9 @@ pnpm test:e2e
 
 Use `pnpm preview` to run the production build, including the service worker. The build uses Vite, TypeScript, Tailwind CSS, and Vite PWA. GitHub Actions tests and deploys `dist/` to Pages on pushes to `main`. The same directory can be served from any HTTPS static host. Set `BASE_PATH` to the published subpath if it differs from the default relative base.
 
-Online rooms use PeerJS Cloud for signaling and WebRTC data channels for play. The browsers use public STUN servers to discover direct routes. A TURN server can carry moves when network conditions require a relay. Both players see the route selected for their game. Set `LIVE_ROOM_TEST=1` to include real two-browser tests, and set `PLAY_URL` to run the suite against an existing deployment.
+Online rooms use PeerJS Cloud for signaling and WebRTC data channels for play. The browsers use public STUN servers to discover direct routes. A TURN server can carry moves when network conditions require a relay. Both players see the route selected for their game. A saved match reopens offline in the same browser profile. Moves resume when both seats reconnect. Guests can still join hosts running the original private-room protocol.
+
+The browser suite runs two players against a local signaling server and decodes the actual invite QR. Set `LIVE_ROOM_TEST=1` to exercise the public signaling service, or set `PLAY_URL` to test an existing deployment.
 
 ## Connect Cloudflare TURN
 

@@ -1,7 +1,8 @@
-import { Peer, type DataConnection } from 'peerjs';
+import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
 import { observeConnectionRoute, type ConnectionRoute } from './connection-route';
-import { newRoomCode } from './invite';
-import { defaultRtcConfig, relayConfiguration, trackConnectionSetup } from './rtc';
+import { newRoomCode, type createRoomCodes } from './invite';
+import { defaultRtcConfig, trackConnectionSetup } from './rtc';
+import { prepareNetwork } from './transport';
 
 export type Seat = 0 | 1;
 export type HostedRoom = { code: string; token?: string };
@@ -17,7 +18,9 @@ export interface MultiplayerGame<Profile, Action extends object> {
   /** Unique across games using the same signaling service. Include the protocol version. */
   namespace: string;
   storageKey?: string;
+  codes?: ReturnType<typeof createRoomCodes>;
   relayUrl?: string;
+  peerOptions?: Pick<PeerOptions, 'host' | 'port' | 'secure' | 'path'>;
   isProfile: (value: unknown) => value is Profile;
   parseAction: (value: unknown) => Action | null;
   hello?: Fields;
@@ -43,6 +46,7 @@ export function openPeerRoom<Profile, Action extends object>(
   handlers: RoomHandlers<Profile, Action>, restored?: HostedRoom,
 ) {
   const prefix = game.namespace + '-';
+  const generateCode = game.codes?.newRoomCode ?? newRoomCode;
   const host = code === null;
   const hostToken = host ? restored?.token ?? crypto.randomUUID() : undefined;
   let peer: Peer;
@@ -217,9 +221,10 @@ export function openPeerRoom<Profile, Action extends object>(
 
   function register(roomCode: string) {
     attempts++;
+    const options = { ...game.peerOptions, config: rtcConfig };
     const registered = hostToken
-      ? new Peer(prefix + roomCode, { token: hostToken, config: rtcConfig })
-      : new Peer(prefix + 'guest-' + crypto.randomUUID(), { config: rtcConfig });
+      ? new Peer(prefix + roomCode, { ...options, token: hostToken })
+      : new Peer(prefix + 'guest-' + crypto.randomUUID(), options);
     peer = registered;
     timeLimit(() => fail('The room service didn’t respond in time. Check your internet connection and try again.', 'service'));
     registered.on('open', () => {
@@ -232,7 +237,7 @@ export function openPeerRoom<Profile, Action extends object>(
     registered.on('error', error => {
       if (closed || registered !== peer || (playing && channel?.open)) return;
       if (host && !restored && error.type === 'unavailable-id' && attempts < 4) {
-        register(newRoomCode());
+        register(generateCode());
         registered.destroy();
       } else if (error.type === 'peer-unavailable') {
         // An expired reply to a departed guest does not invalidate the host's registration.
@@ -259,14 +264,13 @@ export function openPeerRoom<Profile, Action extends object>(
     });
   }
 
-  const roomCode = code ?? restored?.code ?? newRoomCode();
+  const roomCode = code ?? restored?.code ?? generateCode();
   async function prepareRoom() {
     cancelTimeout();
-    const endpoint = game.relayUrl;
-    if (endpoint) {
-      const relay = await relayConfiguration(endpoint, listeners.signal);
-      relayUnavailable = relay.unavailable;
-      rtcConfig = relay.config;
+    if (game.relayUrl) {
+      const network = await prepareNetwork(game.relayUrl, listeners.signal);
+      relayUnavailable = network.unavailable;
+      rtcConfig = network.config;
     }
     if (!closed) {
       try { register(roomCode); }

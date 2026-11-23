@@ -11,8 +11,9 @@ import {
   type Color, type Difficulty, type Match, type Mode, type Player, type PlayerIndex,
 } from './game';
 import { setupInstall } from './install';
-import { createMultiplayer, createInviteControls, isRoomCode, readInviteCode } from './multiplayer';
-import { applyRoomMove, readyForRematch, ticTacToeOnline, type RoundAction } from './online';
+import { createMultiplayer, createInviteControls, isRoomCode, NoHostReply, readInviteCode } from './multiplayer';
+import { applyRoomMove, enter, feedback, readyForRematch, roomStore, savedRoom, ticTacToeOnline,
+  type OnlineView, type RoundAction, type Session } from './online';
 import './style.css';
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -64,6 +65,11 @@ let resultTimer: number | undefined;
 let noticeTimer: number | undefined;
 let roomPlayer: PlayerIndex = 0;
 let ready: [boolean, boolean] = [false, false];
+let session: Session | undefined;
+let opening: AbortController | undefined;
+let onlineView: OnlineView | undefined;
+type RoomRole = 'host' | 'guest' | 'public';
+type Operation = Parameters<typeof enter>[0];
 const invitations = createInviteControls({
   code: element('room-code'), link: element('invite-link'), qr: element('room-qr'),
   copy: element('copy-room'), share: element('share-room'),
@@ -142,18 +148,20 @@ function showRoomError(message: string) {
   joinError.focus();
 }
 
-function setRoomRole(joining: boolean) {
-  form.querySelector<HTMLInputElement>(`[name="room-role"][value="${joining ? 'guest' : 'host'}"]`)!.checked = true;
+function setRoomRole(role: RoomRole) {
+  const joining = role === 'guest';
+  form.querySelector<HTMLInputElement>(`[name="room-role"][value="${role}"]`)!.checked = true;
   element('code-field').hidden = !joining;
   joinCode.disabled = !joining;
   clearRoomError();
   element('room-hint').textContent = joining
     ? 'Use the five-character code from your friend.'
-    : 'Create a room to get a code, link, and QR invite to share.';
-  element('start-label').textContent = joining ? 'Join room' : 'Create a room';
+    : role === 'public' ? 'Play the next available opponent on a 3×3 board.'
+    : 'Invite a friend with a code, link, or QR code.';
+  element('start-label').textContent = { guest: 'Join room', public: 'Find public game', host: 'Create private room' }[role];
   const icon = element('profile-one').querySelector<HTMLElement>('.profile-icon')!;
   icon.innerHTML = markMarkup(joining ? 'O' : 'X');
-  element('profile-one').querySelector('small')!.textContent = joining ? 'Starts as O' : 'Starts as X';
+  element('profile-one').querySelector('small')!.textContent = role === 'public' ? 'Choose your look' : joining ? 'Starts as O' : 'Starts as X';
 }
 
 function openSetup(next: Mode, code = '') {
@@ -174,9 +182,10 @@ function openSetup(next: Mode, code = '') {
   element('room-choice').hidden = mode !== 'online';
   form.classList.toggle('online-form', mode === 'online');
   element('setup-description').hidden = mode === 'online';
-  if (mode === 'online') setRoomRole(Boolean(code));
+  if (mode === 'online') setRoomRole(code ? 'guest' : 'host');
   else element('start-label').textContent = 'Start battle';
-  element('resume-button').hidden = mode === 'online' || !savedMode(mode);
+  element('resume-button').hidden = mode === 'online' ? !savedRoom() : !savedMode(mode);
+  element('resume-button').textContent = mode === 'online' ? 'Resume room' : 'Resume match';
   joinCode.value = code;
   clearRoomError();
   showScreen('setup');
@@ -192,7 +201,12 @@ function profileFrom(formData: FormData, slot: 'one' | 'two', fallback: Player) 
   return player(String(formData.get('name-' + slot) ?? ''), (formData.get('color-' + slot) as Color) || fallback.color, fallback.name);
 }
 
-function goHome() {
+function clearGame() {
+  opening?.abort();
+  opening = undefined;
+  const current = session;
+  session = undefined;
+  void current?.leave();
   multiplayer.leave();
   invitations.clear();
   window.clearTimeout(aiTimer);
@@ -200,15 +214,24 @@ function goHome() {
   celebration.stop();
   if (resultDialog.open) resultDialog.close();
   match = null;
+  onlineView = undefined;
+}
+
+function goHome() {
+  clearGame();
+  clearInviteURL();
   showScreen('home');
 }
 
 function requestHome() {
-  if (screen === 'room' || multiplayer.active) leaveDialog.showModal();
+  if (mode === 'online' && screen === 'game') leaveDialog.showModal();
   else goHome();
 }
 
 function startGame(newMatch: Match) {
+  const back = mode === 'online' ? 'Leave room' : 'All modes';
+  element('game-back-label').textContent = back;
+  element('result-menu').textContent = back;
   connectionRoute.hidden = mode !== 'online';
   connectionRoute.textContent = '';
   match = newMatch;
@@ -256,12 +279,15 @@ function renderGame() {
   const result = resultFor(board);
   const active = playerFor(current, turn(current));
   const winner = result?.mark ? playerFor(current, result.mark) : null;
-  const isMyTurn = mode === 'local' || active === (mode === 'ai' ? 0 : roomPlayer);
+  const isMyTurn = (mode === 'local' || active === (mode === 'ai' ? 0 : roomPlayer))
+    && (!onlineView || (onlineView.connected && !onlineView.syncing));
   const roundCounter = element('round-counter');
   roundCounter.textContent = `Round ${current.round}`;
   roundCounter.hidden = Boolean(result);
   element('result-button').hidden = !result;
-  if (winner !== null) showTurnStatus(' wins the round!', current.players[winner].name);
+  if (onlineView && (!onlineView.connected || onlineView.notice)) showTurnStatus(onlineView.notice || 'Board saved. Waiting for your opponent to reconnect…');
+  else if (onlineView?.syncing) showTurnStatus('Sending your move…');
+  else if (winner !== null) showTurnStatus(' wins the round!', current.players[winner].name);
   else if (result) showTurnStatus('The round is a draw.');
   else if (mode === 'online' && isMyTurn) showTurnStatus(`Your turn · ${turn(current)}`);
   else if (mode === 'ai' && active === 1) showTurnStatus('T-3PO is thinking…');
@@ -311,7 +337,7 @@ function renderGame() {
 }
 
 function showResult(animate: boolean) {
-  if (!match || resultDialog.open || leaveDialog.open || screen !== 'game') return;
+  if (!match || leaveDialog.open || screen !== 'game') return;
   const result = resultFor(boardFor(match));
   if (!result) return;
   const winner = result.mark ? match.players[playerFor(match, result.mark)] : null;
@@ -322,9 +348,9 @@ function showResult(animate: boolean) {
   element('result-title').textContent = winner ? `${winner.name} wins!` : 'It’s a draw!';
   resultDialog.style.setProperty('--winner', winner ? palette[winner.color] : '#e5d8ff');
   element('result-detail').textContent = waiting ? 'Waiting for your opponent to accept.' : `${next.name} gets X and goes first in the rematch.`;
-  element<HTMLButtonElement>('rematch-button').disabled = waiting;
+  element<HTMLButtonElement>('rematch-button').disabled = waiting || Boolean(onlineView && !onlineView.connected);
   element('rematch-label').textContent = waiting ? 'Ready' : 'Rematch';
-  resultDialog.showModal();
+  if (!resultDialog.open) resultDialog.showModal();
   if (animate && winner) {
     celebration.play(palette[winner.color]);
     audio.win();
@@ -355,6 +381,7 @@ function scheduleAI() {
 function placeMark(index: number) {
   audio.unlock();
   if (!match) return;
+  if (session) { session.move(index); return; }
   const actor = mode === 'online' ? roomPlayer : mode === 'ai' ? 0 : playerFor(match, turn(match));
   const next = move(match, index, actor);
   if (!next) return;
@@ -419,6 +446,90 @@ const multiplayer = createMultiplayer(ticTacToeOnline, {
   },
 });
 
+function clearInviteURL() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has('room')) return;
+  url.searchParams.delete('room');
+  history.replaceState(null, '', url);
+}
+
+function exitOnline() {
+  clearGame();
+  clearInviteURL();
+  openSetup('online');
+}
+
+function showOnline(view: OnlineView, selected: Player) {
+  const { room, seat } = view;
+  const previous = onlineView;
+  onlineView = view;
+  if (!previous) {
+    const url = new URL(location.href);
+    if (url.searchParams.has('room') && url.searchParams.get('room') !== room.code) {
+      url.searchParams.set('room', room.code);
+      history.replaceState(null, '', url);
+    }
+  }
+  if (room.status === 'abandoned') {
+    exitOnline();
+    if (leaveDialog.open) leaveDialog.close('stay');
+    showRoomError(view.notice || 'Your opponent left the room. Create a room or find a public game to play again.');
+    return;
+  }
+  if (room.status === 'waiting' || !room.players.player2) {
+    element('room-status').textContent = view.notice || (room.public ? 'Looking for another player…' : 'Waiting for a friend to join…');
+    element('invite').hidden = false;
+    if (element('room-code').textContent !== room.code) void invitations.show(room.code);
+    return;
+  }
+  roomPlayer = seat === 'Player1' ? 0 : 1;
+  const next: Match = { ...room.state, players: [room.players.player1, room.players.player2] };
+  if (!match || screen !== 'game') {
+    invitations.clear();
+    startGame(next);
+    if (view.connected && roomPlayer === 1 && next.players[1].color !== selected.color)
+      notify(`You’re playing ${next.players[1].color}. Your host picked ${selected.color} too.`);
+  } else if (match.round !== next.round) rematch(next);
+  else if (next.moves.length > match.moves.length) finishMove(next);
+  else { match = next; renderGame(); }
+  ready = room.rematchVotes ?? [false, false];
+  connectionRoute.textContent = view.connected
+    ? { direct: 'Direct', relay: 'Via relay', unknown: 'Route unknown' }[view.route] : 'Reconnecting…';
+  if (room.status === 'finished' && resultDialog.open) showResult(false);
+}
+
+async function openOnline(action: Operation, profile: Player, code = '') {
+  opening?.abort();
+  const attempt = new AbortController();
+  opening = attempt;
+  const status = element('room-status');
+  invitations.clear();
+  element('invite').hidden = true;
+  status.textContent = { create: 'Creating your room…', join: `Joining room ${code}…`,
+    public: 'Looking for another player…', restore: 'Reopening your room…' }[action];
+  showScreen('room');
+  try {
+    const room = await enter(action, profile, '3x3', code, message => {
+      if (!attempt.signal.aborted) status.textContent = message;
+    }, attempt.signal);
+    if (attempt.signal.aborted) { room.stop(); return; }
+    session = room;
+    room.watch(view => { if (session === room) showOnline(view, profile); });
+  } catch (error) {
+    if (attempt.signal.aborted) return;
+    if (action === 'join' && (error instanceof NoHostReply || (error as { type?: string })?.type === 'peer-unavailable')) {
+      // Invites issued before recoverable matches use the same five characters on the original endpoint.
+      // The primary lookup already allowed time for a suspended host to return.
+      multiplayer.join(profile, code, 0);
+      return;
+    }
+    showScreen('setup');
+    showRoomError(feedback.roomFailure(error, action));
+  } finally {
+    if (opening === attempt) opening = undefined;
+  }
+}
+
 for (let i = 0; i < 9; i++) {
   const cell = document.createElement('button');
   cell.type = 'button';
@@ -475,11 +586,7 @@ async function copyGameLink() {
 if ('commandForElement' in HTMLButtonElement.prototype) gameLink.addEventListener('command', copyGameLink);
 else element('copy-game-link').addEventListener('click', copyGameLink);
 
-element('room-back').addEventListener('click', () => {
-  multiplayer.leave();
-  invitations.clear();
-  showScreen('setup');
-});
+element('room-back').addEventListener('click', exitOnline);
 element('sound-button').addEventListener('click', () => {
   audioEnabled = !audioEnabled;
   updateSound();
@@ -487,7 +594,11 @@ element('sound-button').addEventListener('click', () => {
   save('sound', audioEnabled);
 });
 element('resume-button').addEventListener('click', () => {
-  if (mode === 'online') return;
+  if (mode === 'online') {
+    const saved = savedRoom();
+    if (saved) void openOnline('restore', saved.room.players.player1, saved.room.code);
+    return;
+  }
   const saved = savedMode(mode);
   if (!saved) return;
   audio.unlock();
@@ -497,7 +608,7 @@ element('resume-button').addEventListener('click', () => {
 form.addEventListener('change', event => {
   const input = event.target as HTMLInputElement;
   if (input.name === 'difficulty') setDifficulty(input.value as Difficulty);
-  if (input.name === 'room-role') setRoomRole(input.value === 'guest');
+  if (input.name === 'room-role') setRoomRole(input.value as RoomRole);
 });
 joinCode.addEventListener('input', clearRoomError);
 form.addEventListener('submit', event => {
@@ -508,8 +619,9 @@ form.addEventListener('submit', event => {
   save('profiles:' + mode, [first, second]);
   audio.unlock();
   if (mode === 'online') {
-    if (input.get('room-role') === 'host') {
-      multiplayer.host(first);
+    const role = input.get('room-role');
+    if (role !== 'guest') {
+      void openOnline(role === 'public' ? 'public' : 'create', first);
       return;
     }
     const code = joinCode.value.trim().toUpperCase();
@@ -520,7 +632,7 @@ form.addEventListener('submit', event => {
       joinCode.focus();
       return;
     }
-    multiplayer.join(first, code);
+    void openOnline('join', first, code);
     return;
   }
   if (mode === 'ai') save('difficulty', difficulty);
@@ -530,7 +642,7 @@ form.addEventListener('submit', event => {
 leaveDialog.addEventListener('close', () => {
   const action = leaveDialog.returnValue;
   leaveDialog.returnValue = '';
-  if (action === 'leave') goHome();
+  if (action === 'leave') exitOnline();
 });
 resultDialog.addEventListener('close', () => {
   celebration.stop();
@@ -540,6 +652,11 @@ resultDialog.addEventListener('close', () => {
   if (action === 'menu') requestHome();
   if (action === 'rematch' && mode !== 'online') rematch(nextRound(match));
   if (action === 'rematch' && mode === 'online') {
+    if (session) {
+      session.rematch();
+      if (match && resultFor(boardFor(match))) showResult(false);
+      return;
+    }
     const message = { kind: 'ready' as const, round: match.round };
     if (ready[roomPlayer] || !multiplayer.send(message)) return;
     const current = match;
@@ -556,16 +673,21 @@ createIcons({
 updateSound();
 const url = new URL(location.href);
 const invited = readInviteCode(url);
-if (invited) {
-  openSetup('online', invited);
-  url.searchParams.delete('room');
-  history.replaceState(null, '', url);
+const hasInvite = url.searchParams.has('room');
+const saved = !hasInvite || invited ? savedRoom(invited ?? undefined) : undefined;
+const waiting = roomStore.waitingHost.read();
+const restoreCode = saved?.room.code ?? (waiting && (!hasInvite || waiting.code === invited) ? waiting.code : '');
+if (hasInvite || restoreCode) openSetup('online', invited || url.searchParams.get('room') || '');
+if (restoreCode) void openOnline('restore', saved?.room.players.player1 ?? waiting!.profile.player, restoreCode);
+else if (hasInvite && !invited) {
+  setRoomRole('guest');
+  showRoomError(feedback.roomMessages.invalidCode);
 }
-const restoredHost = !invited && multiplayer.restore();
+const restoredHost = !restoreCode && (!hasInvite || !!invited) && multiplayer.restore(invited ?? undefined);
 setupInstall(
   element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
   notify, {
-    offerOnLaunch: !invited && !restoredHost,
+    offerOnLaunch: !hasInvite && !restoreCode && !restoredHost,
     beforeUpdateReload: () => {
       const code = joinCode.value.trim().toUpperCase();
       if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;

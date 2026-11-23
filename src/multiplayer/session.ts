@@ -15,7 +15,8 @@ export interface MultiplayerEvents<Profile, Action> {
 export function createMultiplayer<Profile, Action extends object>(
   game: MultiplayerGame<Profile, Action>, events: MultiplayerEvents<Profile, Action>,
 ) {
-  const store = createLobbyStore(game.storageKey ?? game.namespace + ':waiting-host', game.isProfile);
+  const validCode = game.codes?.isRoomCode ?? isRoomCode;
+  const store = createLobbyStore(game.storageKey ?? game.namespace + ':waiting-host', game.isProfile, validCode);
   const lifetime = new AbortController();
   const options = { signal: lifetime.signal };
   let room: ReturnType<typeof openPeerRoom<Profile, Action>> | undefined;
@@ -127,17 +128,22 @@ export function createMultiplayer<Profile, Action extends object>(
 
   return {
     host(profile: Profile) { leave(); connect(profile, null); },
-    join(profile: Profile, input: string) {
+    join(profile: Profile, input: string, waitForHostMs = 25_000) {
       const code = input.trim().toUpperCase();
-      if (!isRoomCode(code)) { events.error('Enter the five-character code from your friend.', code); return; }
+      if (!validCode(code)) {
+        const length = game.codes?.length;
+        events.error('Enter the ' + (!length || length === 5 ? 'five' : length) + '-character code from your friend.', code);
+        return;
+      }
       leave();
-      retryUntil = Date.now() + 25_000;
+      retryUntil = Date.now() + waitForHostMs;
       connect(profile, code);
     },
-    restore() {
+    restore(expectedCode?: string) {
       if (room || lobby || lifetime.signal.aborted) return false;
-      lobby = store.read();
-      if (!lobby) return false;
+      const saved = store.read();
+      if (!saved || (expectedCode && saved.code !== expectedCode)) return false;
+      lobby = saved;
       events.opening?.(null, true);
       events.invite(lobby.code, 'Waiting for a friend to join…');
       resume();
