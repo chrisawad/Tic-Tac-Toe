@@ -13,7 +13,7 @@ export default defineConfig({
         name: 'Tic Tac Toe',
         short_name: 'Tic Tac Toe',
         description: 'Play against T-3PO, pass the screen, or invite a friend.',
-        start_url: './',
+        start_url: './#from=tictactoe-app',
         scope: './',
         display: 'standalone',
         theme_color: '#131323',

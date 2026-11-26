@@ -16,7 +16,7 @@ export function setupInstall(
   dialog: HTMLDialogElement,
   update: HTMLButtonElement,
   notify: (message: string) => void,
-  { offerOnLaunch, beforeUpdateReload }: { offerOnLaunch: boolean; beforeUpdateReload: () => void },
+  { offerOnLaunch, beforeUpdateReload }: { offerOnLaunch: () => boolean; beforeUpdateReload: () => void },
 ) {
   const nav = navigator as InstallNavigator;
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
@@ -26,10 +26,16 @@ export function setupInstall(
   const dismiss = dialog.querySelector<HTMLButtonElement>('#install-dismiss')!;
   const benefit = dialog.querySelector<HTMLElement>('#install-benefit')!;
   const copyStatus = dialog.querySelector<HTMLElement>('#install-copy-status')!;
-  const storageKey = 'ttt:installed';
+  const sources = new URLSearchParams(location.hash.slice(1)).getAll('from');
+  const dashboardLaunch = sources.includes('games-dashboard');
+  // A Dashboard window can report the same display mode as this game's own window.
+  const gameLaunch = window === window.top && sources.includes('tictactoe-app') && !dashboardLaunch;
+  const instructions = installInstructions();
+  const showDirectionsOnEntry = dashboardLaunch || instructions.mobile || window !== window.top;
+  const updateDialog = document.querySelector<HTMLDialogElement>('#update-dialog')!;
   let pending: NativeInstall | undefined;
   let installed = false;
-  let checked = false;
+  let readyToOffer = false;
   let offered = false;
   let readingHelp = false;
   let related = false;
@@ -37,14 +43,8 @@ export function setupInstall(
   let nativeFailed = false;
   const nativeAvailable = () => typeof nav.install === 'function' && !nativeFailed;
   const canInstall = () => isSecureContext && (nativeAvailable() || Boolean(pending));
-  try { installed = localStorage.getItem(storageKey) === 'yes'; } catch { /* Private storage may be unavailable. */ }
-  function remember(value: boolean) {
-    installed = value;
-    try {
-      if (value) localStorage.setItem(storageKey, 'yes');
-      else localStorage.removeItem(storageKey);
-    } catch { /* In-memory detection still works. */ }
-  }
+  const inGameWindow = () => gameLaunch && (display.matches || nav.standalone === true);
+  const showDirections = () => readingHelp || showDirectionsOnEntry || !canInstall();
   function openDialog(manual: boolean) {
     offered = true;
     readingHelp = manual;
@@ -52,53 +52,47 @@ export function setupInstall(
     dismiss.textContent = manual ? 'Done' : 'Not now';
     benefit.hidden = manual;
     copyStatus.textContent = '';
-    steps.hidden = !manual && canInstall();
+    steps.hidden = !showDirections();
     if (!dialog.open) dialog.showModal();
   }
 
   function reflect() {
-    const standalone = display.matches || nav.standalone === true;
+    const standalone = inGameWindow();
     const alreadyInstalled = standalone || installed || related;
     install.hidden = alreadyInstalled || !canInstall();
     help.hidden = standalone;
     confirm.hidden = install.hidden;
-    steps.hidden = !readingHelp && canInstall();
+    steps.hidden = !showDirections();
     if (alreadyInstalled && dialog.open && !readingHelp) dialog.close();
-    else if (offerOnLaunch && update.hidden && checked && !alreadyInstalled && !offered) openDialog(false);
+    else if (readyToOffer && !alreadyInstalled && !offered && !updateDialog.open && offerOnLaunch()) openDialog(false);
   }
+  let latestCheck = 0;
   async function checkRelated() {
-    if (!isSecureContext || !nav.getInstalledRelatedApps) return;
+    const check = ++latestCheck;
     try {
+      if (!isSecureContext || !nav.getInstalledRelatedApps) return;
       const base = new URL(import.meta.env.BASE_URL, document.baseURI);
       const manifest = new URL('manifest.webmanifest', base).href;
-      related = (await nav.getInstalledRelatedApps()).some(app => app.platform === 'webapp' && (app.id === base.href || app.url === manifest));
+      const apps = await nav.getInstalledRelatedApps();
+      if (check !== latestCheck) return;
+      related = apps.some(app => app.platform === 'webapp' && (app.id === base.href || app.url === manifest));
       reflect();
     } catch { /* The browser’s installation help remains available. */ }
   }
   window.addEventListener('beforeinstallprompt', event => {
     event.preventDefault();
-    if (display.matches || nav.standalone) return;
+    if (inGameWindow()) return;
     pending = event as NativeInstall;
-    remember(false);
-    related = false;
     reflect();
   });
   window.addEventListener('appinstalled', () => {
-    remember(true);
+    installed = true;
     pending = undefined;
     reflect();
   });
   window.addEventListener('focus', () => { reflect(); void checkRelated(); });
-  window.addEventListener('storage', event => {
-    if (event.key !== storageKey) return;
-    installed = event.newValue === 'yes';
-    reflect();
-  });
-  function displayChanged() {
-    if (display.matches || nav.standalone) remember(true);
-    reflect();
-  }
-  display.addEventListener('change', displayChanged);
+  display.addEventListener('change', reflect);
+  updateDialog.addEventListener('close', reflect);
   async function requestInstall() {
     if (busy || !canInstall()) return;
     offered = true;
@@ -108,12 +102,12 @@ export function setupInstall(
     try {
       if (nativeAvailable()) {
         await nav.install!();
-        remember(true);
+        installed = true;
       } else if (pending) {
         const event = pending;
         pending = undefined;
         await event.prompt();
-        if ((await event.userChoice).outcome === 'accepted') remember(true);
+        if ((await event.userChoice).outcome === 'accepted') installed = true;
         if (!installed) {
           notify('Installation canceled. You can install later.');
         }
@@ -133,7 +127,6 @@ export function setupInstall(
       if (wasFocused && install.hidden && !help.hidden) help.focus();
     }
   }
-  const instructions = installInstructions();
   if (!isSecureContext) instructions.steps.unshift('Copy the secure game link below and open it in your browser.');
   dialog.querySelector('#install-directions')!.replaceChildren(...instructions.steps.map(text => {
     const item = document.createElement('li');
@@ -145,14 +138,21 @@ export function setupInstall(
   install.addEventListener('click', requestInstall);
   confirm.addEventListener('click', requestInstall);
   help.addEventListener('click', () => openDialog(true));
-  displayChanged();
-  void checkRelated().then(() => { checked = true; reflect(); });
+  reflect();
+  function enableLaunchOffer() {
+    readyToOffer = true;
+    reflect();
+  }
+  // Give a fast positive result time to arrive. Embedded browsers may never settle this call.
+  const deadline = window.setTimeout(enableLaunchOffer, 400);
+  void checkRelated().then(() => { clearTimeout(deadline); enableLaunchOffer(); });
   setupUpdates(update, dialog, beforeUpdateReload);
 }
 
 function installInstructions() {
   const ua = navigator.userAgent;
   if (/Android/i.test(ua)) return {
+    mobile: true,
     steps: [
       'If the game opened inside another app, open its ⋮ menu and tap Open in Chrome or Open in browser. Choose Chrome if asked.',
       'If that option is missing, copy the game link below, open Chrome, and paste it into the address bar.',
@@ -162,6 +162,7 @@ function installInstructions() {
     copyLink: true,
   };
   if (/iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return {
+    mobile: true,
     steps: [
       'Open the game in Safari. If you’re inside another app, copy the game link below and paste it into Safari.',
       'Tap Share, then Add to Home Screen. Turn on Open as Web App if available, then tap Add.',
@@ -170,11 +171,13 @@ function installInstructions() {
     copyLink: true,
   };
   if (/Mac/.test(navigator.platform) && /Safari\//.test(ua) && !/Chrom(?:e|ium)\//.test(ua)) return {
+    mobile: false,
     steps: ['In Safari, open the File menu, choose Add to Dock, then click Add.'],
     launch: 'Already installed? Open Tic Tac Toe from the Dock or search for it in Spotlight.',
     copyLink: false,
   };
   return {
+    mobile: false,
     steps: ['Open the game in Chrome or Edge. Choose the install icon in the address bar, or open the browser menu and look for the option to install this page as an app.'],
     launch: 'Already installed? Search for Tic Tac Toe in your computer’s apps and open it.',
     copyLink: true,

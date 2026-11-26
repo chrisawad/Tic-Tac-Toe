@@ -160,7 +160,7 @@ test('manifest, icons, install eligibility, and offline play under the Pages sco
       worker: navigator.serviceWorker.controller?.scriptURL,
     };
   });
-  expect(details).toMatchObject({ id: baseURL, start: baseURL, scope: baseURL, display: 'standalone', icons: [true, true, true], worker: new URL('sw.js', page.url()).href });
+  expect(details).toMatchObject({ id: baseURL, start: new URL('#from=tictactoe-app', baseURL).href, scope: baseURL, display: 'standalone', icons: [true, true, true], worker: new URL('sw.js', page.url()).href });
   await context.setOffline(true);
   await startLocal(page);
   await square(page, 0).click();
@@ -174,7 +174,11 @@ test('manifest, icons, install eligibility, and offline play under the Pages sco
 
 test('install popup opens on launch, calls the native prompt, and stays hidden after installation', async ({ page }) => {
   await page.addInitScript(() => {
-    // Emulate an installed browser on reload, which no longer advertises eligibility.
+    // The browser can confirm this installation in the new document after reload.
+    Object.defineProperty(navigator, 'getInstalledRelatedApps', {
+      value: async () => sessionStorage.getItem('test-installed')
+        ? [{ platform: 'webapp', url: new URL('manifest.webmanifest', location.href).href }] : [],
+    });
     window.addEventListener('beforeinstallprompt', event => {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -183,6 +187,7 @@ test('install popup opens on launch, calls the native prompt, and stays hidden a
       configurable: true,
       value: () => {
         document.documentElement.dataset.install = String(navigator.userActivation.isActive);
+        sessionStorage.setItem('test-installed', 'yes');
         window.dispatchEvent(new Event('appinstalled'));
         return Promise.resolve();
       },
@@ -292,9 +297,9 @@ for (const installed of [false, true]) {
   });
 }
 
-test('standalone display hides the install affordance', async ({ page }) => {
+test('launching the installed game hides the install affordance', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(navigator, 'standalone', { value: true }); });
-  await page.goto('./');
+  await page.goto('./#from=tictactoe-app');
   await expect(page.locator('#install-dialog')).toBeHidden();
   await expect(page.getByRole('button', { name: /install/i })).toHaveCount(0);
   await expect(mode(page, 'local')).toBeVisible();
@@ -496,7 +501,7 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
       return new Promise(resolve => window.addEventListener('pageshow', resolve, { once: true }));
     } });
   }, isMobile);
-  await page.goto('./');
+  await page.goto(isMobile ? './#from=tictactoe-app' : './');
   if (!isMobile) await dismissInstall(page);
   await mode(page, 'online').click();
   await page.getByRole('button', { name: 'Create private room' }).click();
@@ -536,7 +541,7 @@ test('opening a second installed window preserves the waiting room in the origin
     connections++;
     socket.send(JSON.stringify({ type: 'OPEN' }));
   });
-  await page.goto('./');
+  await page.goto('./#from=tictactoe-app');
   await mode(page, 'online').click();
   await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();

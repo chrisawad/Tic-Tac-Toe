@@ -181,7 +181,7 @@
     <dialog id="install-dialog" aria-labelledby="install-title">
       <div class="install-heading">
         <img src="./icons/icon-192.png" width="52" height="52" alt="">
-        <h2 id="install-title">Install Tic Tac Toe</h2>
+        <h2 id="install-title" tabindex="-1" autofocus>Install Tic Tac Toe</h2>
       </div>
       <p id="install-benefit">Launch from your home screen and play AI Battle or Local PvP offline.</p>
       <div id="install-steps" hidden>
@@ -197,7 +197,7 @@
         <p id="install-launch"></p>
       </div>
       <form method="dialog" class="dialog-actions">
-        <button id="install-dismiss" class="button" autofocus>Not now</button>
+        <button id="install-dismiss" class="button">Not now</button>
         <button id="install-confirm" class="button primary" type="button" hidden><i data-lucide="download"></i> Install app</button>
       </form>
     </dialog>

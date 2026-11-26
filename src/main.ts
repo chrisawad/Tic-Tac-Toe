@@ -697,7 +697,7 @@ const restoredHost = !restoreCode && (!hasInvite || !!invited) && multiplayer.re
 setupInstall(
   element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
   notify, {
-    offerOnLaunch: !hasInvite && !restoreCode && !restoredHost,
+    offerOnLaunch: () => !hasInvite && !restoreCode && !restoredHost && screen === 'home',
     beforeUpdateReload: () => {
       const code = joinCode.value.trim().toUpperCase();
       if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;
