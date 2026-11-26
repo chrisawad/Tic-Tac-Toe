@@ -3,8 +3,8 @@ import { openPublicLink, publicGameUrl } from './invite-links';
 
 type Lookup = 'unavailable' | 'denied' | 'pending' | 'dashboard' | 'installed';
 
-async function embeddedBrowser(page: Page, platform: 'Android' | 'iPad', lookup: Lookup) {
-  await page.addInitScript(({ platform, lookup }) => {
+async function embeddedBrowser(page: Page, platform: 'Android' | 'iPad', lookup: Lookup, installError?: string) {
+  await page.addInitScript(({ platform, lookup, installError }) => {
     if (!location.protocol.startsWith('http')) return;
     localStorage.setItem('ttt:installed', 'yes');
     sessionStorage.setItem('ttt:installed', 'yes');
@@ -22,7 +22,9 @@ async function embeddedBrowser(page: Page, platform: 'Android' | 'iPad', lookup:
       Object.defineProperty(navigator, 'platform', { value: 'MacIntel' });
       Object.defineProperty(navigator, 'maxTouchPoints', { value: 5 });
     }
-    Object.defineProperty(navigator, 'install', { value: undefined });
+    Object.defineProperty(navigator, 'install', {
+      value: installError && (async () => { throw new DOMException(installError, installError); }),
+    });
     window.addEventListener('beforeinstallprompt', event => {
       if (event.isTrusted) { event.preventDefault(); event.stopImmediatePropagation(); }
     });
@@ -40,7 +42,23 @@ async function embeddedBrowser(page: Page, platform: 'Android' | 'iPad', lookup:
         return new Promise(() => {});
       };
     }
-  }, { platform, lookup });
+  }, { platform, lookup, installError });
+}
+
+async function offerNativePrompt(page: Page) {
+  await page.evaluate(() => window.dispatchEvent(Object.assign(new Event('beforeinstallprompt', { cancelable: true }), {
+    prompt: async () => { document.documentElement.dataset.installClick = String(navigator.userActivation.isActive); },
+    userChoice: new Promise(resolve => window.addEventListener('test-accept', () => resolve({ outcome: 'accepted' }), { once: true })),
+  })));
+}
+
+async function expectCompactInstall(page: Page, action = 'Install app') {
+  const dialog = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+  await expect(dialog).toHaveAccessibleDescription('Keep Tic Tac Toe on your home screen and play offline after your first visit.');
+  await expect(dialog.getByRole('button')).toHaveText([action, 'Not now']);
+  await expect(dialog.locator('#install-directions')).toBeHidden();
+  await expect(dialog.locator('#install-copy')).toBeHidden();
+  await expect(dialog.getByRole('textbox')).toHaveCount(0);
 }
 
 test('Dashboard offers the same dialog once per visit, on fresh navigation, reload and in a new tab', async ({ page, context, baseURL }) => {
@@ -108,18 +126,55 @@ test('Dashboard help appears while lookups are pending and closes on game-specif
   await expect(page.locator('#install-button')).toBeHidden();
 });
 
-test('Dashboard installation leaves the game guide and captured native prompt available', async ({ page }) => {
+test('a late Dashboard native prompt switches the open dialog to compact and keeps it compact while installing', async ({ page }) => {
   await embeddedBrowser(page, 'Android', 'dashboard');
   await page.goto('./#from=games-dashboard');
   await expect(page.locator('#install-directions')).toBeVisible();
-  await page.evaluate(() => window.dispatchEvent(Object.assign(new Event('beforeinstallprompt', { cancelable: true }), {
-    prompt: async () => { document.documentElement.dataset.installClick = String(navigator.userActivation.isActive); },
-    userChoice: Promise.resolve({ outcome: 'accepted' }),
-  })));
-  await expect(page.locator('#install-directions')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Game link' }).focus();
+  await offerNativePrompt(page);
+  await expectCompactInstall(page);
+  await expect(page.locator('#install-confirm')).toBeFocused();
+  await page.locator('#install-dismiss').click();
+  await page.getByRole('button', { name: 'Install', exact: true }).click();
+  await expectCompactInstall(page);
   await page.locator('#install-confirm').click();
   await expect(page.locator('html')).toHaveAttribute('data-install-click', 'true');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expectCompactInstall(page, 'Installing…');
+  await page.evaluate(() => window.dispatchEvent(new Event('test-accept')));
   await expect(page.locator('#install-dialog')).toBeHidden();
+  await expect(page.locator('#install-button')).toBeHidden();
+});
+
+for (const error of ['NotSupportedError', 'SecurityError']) {
+  test('Dashboard native installation handles ' + error, async ({ page }) => {
+    await embeddedBrowser(page, 'Android', 'unavailable', error);
+    await page.goto('./#from=games-dashboard');
+    await expectCompactInstall(page);
+    await offerNativePrompt(page);
+    await page.locator('#install-confirm').click();
+    const dialog = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+    await expect(dialog.locator('#install-status')).toHaveText('The installer could not open. Try again or use your browser’s install menu.');
+    await expect(dialog.locator('#install-confirm')).toBeHidden();
+    await expect(dialog.locator('#install-directions')).toContainText('Open in Chrome');
+    await expect(dialog.getByRole('textbox', { name: 'Game link' })).toHaveValue(publicGameUrl);
+    await expect(dialog.getByRole('button', { name: 'Copy link' })).toBeVisible();
+    await offerNativePrompt(page);
+    await expectCompactInstall(page);
+    await expect(dialog.locator('#install-status')).toBeEmpty();
+  });
+}
+
+test('canceling a Dashboard native install keeps the compact dialog available to retry', async ({ page }) => {
+  await embeddedBrowser(page, 'Android', 'unavailable', 'AbortError');
+  await page.goto('./#from=games-dashboard');
+  const dialog = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+  await dialog.getByRole('button', { name: 'Install app' }).click();
+  await expect(dialog.locator('#install-status')).toHaveText('Installation canceled. You can keep playing here.');
+  await expectCompactInstall(page);
+  await dialog.getByRole('button', { name: 'Not now' }).click();
+  await page.getByRole('button', { name: 'Install', exact: true }).click();
+  await expectCompactInstall(page);
 });
 
 test('Dashboard launch with a confirmed game installation skips the automatic offer', async ({ page }) => {

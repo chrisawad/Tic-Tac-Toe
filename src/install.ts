@@ -20,6 +20,7 @@ export function setupInstall(
   const display = matchMedia('(display-mode: standalone), (display-mode: minimal-ui), (display-mode: window-controls-overlay)');
   const confirm = dialog.querySelector<HTMLButtonElement>('#install-confirm')!;
   const confirmLabel = confirm.querySelector('span')!;
+  const title = dialog.querySelector<HTMLElement>('#install-title')!;
   const status = dialog.querySelector<HTMLElement>('#install-status')!;
   const steps = dialog.querySelector<HTMLElement>('#install-steps')!;
   const copy = dialog.querySelector<HTMLDetailsElement>('#install-copy')!;
@@ -48,19 +49,23 @@ export function setupInstall(
     copy.open = embedded;
     dialog.showModal();
     shownThisVisit = true;
-    if (!embedded && canInstall()) confirm.focus();
+    if (canInstall()) confirm.focus();
   }
 
   function reflect() {
+    const focused = document.activeElement;
     install.hidden = confirmed();
-    confirm.hidden = !busy && !canInstall();
+    const native = busy || canInstall();
+    confirm.hidden = !native;
     confirm.setAttribute('aria-disabled', String(busy));
     confirmLabel.textContent = busy ? 'Installing…' : 'Install app';
-    steps.hidden = !embedded && !confirm.hidden;
+    steps.hidden = native;
     if (install.hidden) {
       if (dialog.open) dialog.close();
       return;
     }
+    if (dialog.open && native && steps.contains(focused)) confirm.focus();
+    if (dialog.open && !native && focused === confirm) title.focus();
     if (readyToOffer && !shownThisVisit && !document.hidden && !document.querySelector('dialog[open]')) openDialog();
   }
 
@@ -79,6 +84,7 @@ export function setupInstall(
   }
   window.addEventListener('beforeinstallprompt', event => {
     event.preventDefault();
+    if (nativeFailed) status.textContent = '';
     pending = event as NativeInstall;
     reflect();
   });
@@ -114,6 +120,7 @@ export function setupInstall(
       if (error instanceof DOMException && error.name === 'AbortError') status.textContent = canceled;
       else {
         nativeFailed = true;
+        pending = undefined;
         status.textContent = 'The installer could not open. Try again or use your browser’s install menu.';
       }
     } finally {
