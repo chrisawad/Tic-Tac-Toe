@@ -573,24 +573,26 @@ async function shareGame() {
 for (const button of document.querySelectorAll('[data-share-game]')) {
   button.addEventListener('click', shareGame);
 }
-function enableGameLinkCopy(link: HTMLInputElement, button: HTMLElement, status: HTMLElement) {
+function enableGameLinkCopy(link: HTMLInputElement, button: HTMLElement, status: HTMLElement, copied: string, fallback: string) {
   async function copy() {
     try {
       await navigator.clipboard.writeText(link.value);
-      status.textContent = 'Game link copied.';
+      status.textContent = copied;
     } catch {
       link.focus();
       link.select();
-      status.textContent = 'Copy the selected link.';
+      status.textContent = fallback;
     }
   }
   if ('commandForElement' in HTMLButtonElement.prototype) link.addEventListener('command', copy);
   else button.addEventListener('click', copy);
 }
-enableGameLinkCopy(gameLink, element('copy-game-link'), element('share-game-status'));
+enableGameLinkCopy(gameLink, element('copy-game-link'), element('share-game-status'), 'Game link copied.', 'Copy the selected link.');
 const installLink = element<HTMLInputElement>('install-game-link');
 installLink.value = gameLink.value;
-enableGameLinkCopy(installLink, element('copy-install-link'), element('install-copy-status'));
+installLink.addEventListener('focus', () => installLink.select());
+enableGameLinkCopy(installLink, element('copy-install-link'), element('install-copy-status'),
+  'Link copied.', 'Use your device’s Copy command to copy the selected link.');
 
 element('room-back').addEventListener('click', exitOnline);
 element('sound-button').addEventListener('click', () => {
@@ -693,17 +695,13 @@ else if (hasInvite && !invited) {
   setRoomRole('guest');
   showRoomError(feedback.roomMessages.invalidCode);
 }
-const restoredHost = !restoreCode && (!hasInvite || !!invited) && multiplayer.restore(invited ?? undefined);
+if (!restoreCode && (!hasInvite || invited)) multiplayer.restore(invited ?? undefined);
 setupInstall(
-  element('install-button'), element('install-help-button'), element('install-dialog'), element('update-button'),
-  notify, {
-    offerOnLaunch: () => !hasInvite && !restoreCode && !restoredHost && screen === 'home',
-    beforeUpdateReload: () => {
-      const code = joinCode.value.trim().toUpperCase();
-      if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;
-      const target = new URL(location.href);
-      setInviteCode(target, code);
-      history.replaceState(null, '', target);
-    },
+  element('install-button'), element('install-dialog'), element('update-button'), () => {
+    const code = joinCode.value.trim().toUpperCase();
+    if (mode !== 'online' || (screen !== 'setup' && screen !== 'room') || joinCode.disabled || !isRoomCode(code)) return;
+    const target = new URL(location.href);
+    setInviteCode(target, code);
+    history.replaceState(null, '', target);
   },
 );

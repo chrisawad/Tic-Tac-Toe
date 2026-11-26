@@ -55,6 +55,7 @@ test('QR invite, scores, alternating X, both seats recover offline and leave', a
     await openPublicLink(g, scanned!, baseURL!);
     const destination = new URL('#room=' + code, baseURL).href;
     await expect(g).toHaveURL(destination);
+    await button(g, 'Not now').click();
     await expect(g.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
     await expect(g.locator('#join-code')).toHaveValue(code);
     await expect(g.getByRole('dialog')).toHaveCount(0);
@@ -107,8 +108,10 @@ test('QR invite, scores, alternating X, both seats recover offline and leave', a
     const otherCode = code === 'ABC23' ? 'DEF45' : 'ABC23';
     await h.goto(new URL('?room=' + otherCode, baseURL).href);
     await expect(h.locator('#join-code')).toHaveValue(otherCode);
+    await button(h, 'Not now').click();
     await button(h, 'Resume room').click();
     await g.goto(destination);
+    await g.getByRole('dialog', { name: 'Install Tic Tac Toe' }).getByRole('button', { name: 'Not now' }).click();
     for (const page of [h, g]) {
       await expect(page.locator('#round-counter')).toHaveText('Round 2');
       await expect(cell(page, 4)).toHaveAttribute('data-mark', 'X');
@@ -183,6 +186,7 @@ test('typed private code, full room and original waiting-room invite', async ({ 
       token: crypto.randomUUID(), profile: { name: 'Earlier host', color: 'gold' }, savedAt: Date.now(),
     })));
     await h.reload();
+    await button(h, 'Not now').click();
     await expect(h.locator('#room-qr')).toBeVisible({ timeout: 25_000 });
     if (!process.env.PLAY_URL) {
       // A missing destination on the public service can time out without an EXPIRE reply.
@@ -196,6 +200,7 @@ test('typed private code, full room and original waiting-room invite', async ({ 
       });
     }
     await openPublicLink(g, await h.locator('#invite-link').inputValue(), baseURL!);
+    await button(g, 'Not now').click();
     await button(g, 'Join room').click();
     await Promise.all([connected(h), connected(g)]);
     await cell(h, 0).click();
@@ -208,6 +213,7 @@ test('missing room gives a next step after checking both room versions', async (
   test.skip(!!process.env.PLAY_URL || info.project.name !== 'desktop', 'Uses an unregistered code on the local server.');
   test.setTimeout(45_000);
   await page.goto('./?room=ZZZ99');
+  await button(page, 'Not now').click();
   await button(page, 'Join room').click();
   await expect(page.locator('#join-error')).toContainText('Check the code', { timeout: 35_000 });
   await expect(page.locator('#join-code')).toHaveValue('ZZZ99');

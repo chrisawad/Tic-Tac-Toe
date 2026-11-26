@@ -200,7 +200,7 @@ test('install popup opens on launch, calls the native prompt, and stays hidden a
   await expect(dialog).toBeHidden();
   await page.reload();
   await expect(page.getByRole('button', { name: 'Install app', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'How to install' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install', exact: true })).toHaveCount(0);
   await expect(dialog).toBeHidden();
 });
 
@@ -217,16 +217,16 @@ test('Chromium install fallback honors a declined prompt', async ({ page }) => {
     });
     window.dispatchEvent(event);
   });
-  await page.getByRole('button', { name: 'How to install' }).click();
-  const guide = page.getByRole('dialog', { name: 'How to install' });
-  await expect(guide.locator('#install-steps')).toBeVisible();
-  await expect(guide.getByRole('button', { name: 'Install app' })).toBeVisible();
-  await guide.getByRole('button', { name: 'Done' }).click();
-  await page.locator('#install-button').click();
+  await page.getByRole('button', { name: 'Install', exact: true }).click();
+  const guide = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
+  await expect(guide.locator('#install-steps')).toBeHidden();
+  await guide.getByRole('button', { name: 'Install app' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-install', 'true');
-  await expect(page.locator('#install-button')).toBeHidden();
-  await page.locator('#install-help-button').click();
-  await expect(page.locator('#install-steps')).toBeVisible();
+  await expect(guide.locator('#install-status')).toHaveText('Installation canceled. You can keep playing here.');
+  await expect(guide.locator('#install-steps')).toBeVisible();
+  await expect(guide.locator('#install-confirm')).toBeHidden();
+  await dismissInstall(page);
+  await expect(page.getByRole('button', { name: 'Install', exact: true })).toBeVisible();
 });
 
 test('manual install instructions stay accessible from the toolbar and return on the next visit', async ({ page }) => {
@@ -243,21 +243,25 @@ test('manual install instructions stay accessible from the toolbar and return on
   await expect(dialog).toContainText('Add to Home Screen');
   await page.keyboard.press('Escape');
   await mode(page, 'online').click();
-  const help = page.getByRole('dialog', { name: 'How to install' });
-  await page.getByRole('button', { name: 'How to install' }).click();
-  await expect(help).toContainText('Safari');
-  await help.getByRole('button', { name: 'Done' }).click();
+  const install = page.getByRole('button', { name: 'Install', exact: true });
+  await install.click();
+  await expect(dialog.locator('#install-directions li')).toHaveText([
+    'Open Tic Tac Toe in Safari and tap Share.',
+    'Choose Add to Home Screen. Turn on Open as Web App if offered, then tap Add.',
+  ]);
+  await dismissInstall(page);
   await expect(page.locator('#setup-title')).toBeVisible();
   await page.reload();
   await expect(dialog).toBeVisible();
 
   await page.goto('./?room=abc23');
   await expect(page.locator('#join-code')).toHaveValue('ABC23');
+  await dismissInstall(page);
   await page.locator('#join-code').click();
   await expect(dialog).toBeHidden();
-  await page.getByRole('button', { name: 'How to install' }).click();
-  await expect(help).toContainText('Add to Home Screen');
-  await help.getByRole('button', { name: 'Done' }).click();
+  await install.click();
+  await expect(dialog).toContainText('Add to Home Screen');
+  await dismissInstall(page);
   await expect(page.locator('#join-code')).toHaveValue('ABC23');
 });
 
@@ -280,19 +284,30 @@ for (const installed of [false, true]) {
       await expect(page.getByRole('dialog', { name: 'Install Tic Tac Toe' })).toContainText('Open in Chrome');
       await dismissInstall(page);
     }
-    await expect(page.locator('#install-button')).toBeHidden();
     await expect(page.locator('#install-dialog')).toBeHidden();
-    const trigger = page.getByRole('button', { name: 'How to install' });
+    const trigger = page.getByRole('button', { name: 'Install', exact: true });
+    if (installed) {
+      await expect(trigger).toHaveCount(0);
+      return;
+    }
     await trigger.click();
-    const help = page.getByRole('dialog', { name: 'How to install' });
+    const help = page.getByRole('dialog', { name: 'Install Tic Tac Toe' });
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    for (const text of ['Open in Chrome', 'paste it into the address bar', 'Add to Home screen', 'app drawer', 'Search for Tic Tac Toe'])
-      await expect(help).toContainText(text);
+    await expect(help.locator('#install-directions li')).toHaveText([
+      'Choose Open in Chrome in this window’s menu, or copy the game link below and open it in Chrome.',
+      'Tap Chrome’s ⋮ menu, choose Install app or Add to Home screen, and follow the prompt.',
+    ]);
     await expect(help.getByLabel('Game link')).toHaveValue(publicGameUrl);
     await help.getByRole('button', { name: 'Copy link' }).click();
-    await expect(help.getByRole('status')).toHaveText('Game link copied.');
+    await expect(help.locator('#install-copy-status')).toHaveText('Link copied.');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(publicGameUrl);
-    await help.getByRole('button', { name: 'Done' }).click();
+    await page.evaluate(() => Object.defineProperty(navigator.clipboard, 'writeText', {
+      value: async () => { throw new DOMException('Denied', 'NotAllowedError'); },
+    }));
+    await help.getByRole('button', { name: 'Copy link' }).click();
+    await expect(help.locator('#install-copy-status')).toHaveText('Use your device’s Copy command to copy the selected link.');
+    await expect(help.getByLabel('Game link')).toBeFocused();
+    await help.getByRole('button', { name: 'Not now' }).click();
     await expect(trigger).toBeFocused();
   });
 }
@@ -375,6 +390,7 @@ test('Share game opens the native sheet with the public link from setup, home, p
   }));
   await page.setViewportSize({ width: 320, height: 640 });
   await page.goto('./?room=ABC23#invite');
+  await dismissInstall(page);
   async function checkShare(surface = page.getByRole('banner')) {
     const share = surface.getByRole('button', { name: 'Share game', exact: true });
     await expect(share).toBeInViewport({ ratio: 1 });
@@ -463,16 +479,18 @@ test('online setup keeps host and join actions distinct and routes invites to Jo
   await expect(page.locator('#join-error')).toBeEmpty();
   await expect(page.locator('#join-code')).not.toHaveAttribute('aria-invalid');
   await page.goto('./?room=ABC23');
-  await expect(page.locator('#install-dialog')).toBeHidden();
+  await dismissInstall(page);
   await expect(page.getByRole('radio', { name: 'Join a friend' })).toBeChecked();
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('ABC23');
   await page.evaluate(() => { location.hash = 'room=DEF45'; });
+  await dismissInstall(page);
   await expect(page.getByLabel('Room code', { exact: true })).toHaveValue('DEF45');
   await expect(page.locator('#install-dialog')).toBeHidden();
 });
 
 test('offline invite explains the network failure and preserves a valid code', async ({ page, context }) => {
   await page.goto('./?room=ABC23');
+  await dismissInstall(page);
   await context.setOffline(true);
   await page.getByRole('button', { name: 'Join room' }).click();
   const error = page.locator('#join-error');
@@ -524,7 +542,8 @@ test('a shared waiting room survives suspension and relaunch and clears on exit'
   await expect(page.locator('#room-status')).toContainText('Waiting for a friend');
   const restored = isMobile ? await context.newPage() : page;
   if (isMobile) await page.close();
-  await restored.goto('./');
+  await restored.goto(isMobile ? './#from=tictactoe-app' : './');
+  if (!isMobile) await dismissInstall(restored);
   await expect(restored.locator('#room-status')).toContainText('Waiting for a friend');
   await expect(restored.locator('#invite-link')).toHaveValue(invite);
   await expect(restored.locator('#install-dialog')).toBeHidden();
@@ -570,6 +589,7 @@ test('an older saved room with an occupied code offers a new invite immediately'
   });
   await page.reload();
   await expect(page.locator('#join-error')).toContainText('create a new room and share its new invite');
+  await dismissInstall(page);
   expect(attempts).toBe(1);
   await page.getByRole('button', { name: 'Create private room' }).click();
   await expect(page.locator('#room-qr')).toBeVisible();
@@ -624,6 +644,7 @@ test(routeTest, async ({ page, playwright, isMobile, baseURL }) => {
     await page.getByRole('button', { name: 'Create private room' }).click();
     await expect(page.locator('#room-qr')).toBeVisible();
     await openPublicLink(guest, await page.locator('#invite-link').inputValue(), baseURL!);
+    await dismissInstall(guest);
     await guest.getByRole('button', { name: 'Join room' }).click();
     if (retryThroughRelay) await expect(guest.locator('#room-status')).toContainText('Retrying through the backup relay');
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
@@ -667,7 +688,7 @@ test('real online room carries a game and rematch between two browser contexts',
   let staleSocket: WebSocket | undefined;
   try {
     await openPublicLink(guest, invite, baseURL!);
-    await expect(guest.locator('#install-dialog')).toBeHidden();
+    await dismissInstall(guest);
     await expect(guest.locator('#join-code')).toHaveValue(sharedCode);
     await name(guest, 'one').fill('Guest');
     await guest.locator('#profile-one').getByRole('radio', { name: 'violet' }).check({ force: true });
@@ -684,6 +705,7 @@ test('real online room carries a game and rematch between two browser contexts',
     await hostTab.send('Page.setWebLifecycleState', { state: 'active' });
     await page.context().setOffline(false);
     await page.reload();
+    await dismissInstall(page);
     await expect(page.locator('#invite-link')).toHaveValue(invite);
     await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 24000 });
     await expect(guest.locator('#turn-status')).toHaveText('Host’s turn · X');

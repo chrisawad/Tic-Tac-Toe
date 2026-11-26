@@ -22,8 +22,7 @@
             <span id="sound-on"><i data-lucide="volume-2"></i></span>
             <span id="sound-off" hidden><i data-lucide="volume-x"></i></span>
           </button>
-          <button id="install-button" class="button install-button" type="button" hidden><i data-lucide="download"></i> Install app</button>
-          <button id="install-help-button" class="button install-button" type="button" aria-haspopup="dialog" title="How to install"><i data-lucide="circle-help"></i> How to install</button>
+          <button id="install-button" class="button install-button" type="button" aria-haspopup="dialog" aria-controls="install-dialog" title="Install" hidden><i data-lucide="download"></i> Install</button>
           <button id="update-button" class="button install-button" type="button" hidden><i data-lucide="refresh-cw"></i> Update app</button>
         </div>
       </div>
@@ -178,28 +177,28 @@
       <form method="dialog"><button class="button primary" autofocus>Got it</button></form>
     </dialog>
 
-    <dialog id="install-dialog" aria-labelledby="install-title">
+    <dialog id="install-dialog" aria-labelledby="install-title" aria-describedby="install-benefit">
       <div class="install-heading">
         <img src="./icons/icon-192.png" width="52" height="52" alt="">
         <h2 id="install-title" tabindex="-1" autofocus>Install Tic Tac Toe</h2>
       </div>
-      <p id="install-benefit">Launch from your home screen and play AI Battle or Local PvP offline.</p>
+      <p id="install-benefit">Keep Tic Tac Toe on your home screen and play offline after your first visit.</p>
       <div id="install-steps" hidden>
-        <ol id="install-directions"></ol>
-        <div id="install-copy" hidden>
-          <label for="install-game-link">Game link</label>
+        <div id="install-directions"></div>
+        <details id="install-copy">
+          <summary>Copy the game link</summary>
           <div class="install-link-row">
-            <input id="install-game-link" class="name-input" type="url" readonly>
+            <input id="install-game-link" class="name-input" type="url" aria-label="Game link" readonly>
             <button id="copy-install-link" class="button" type="button" command="--copy" commandfor="install-game-link">Copy link</button>
           </div>
           <span id="install-copy-status" role="status"></span>
-        </div>
-        <p id="install-launch"></p>
+        </details>
       </div>
       <form method="dialog" class="dialog-actions">
+        <button id="install-confirm" class="button primary" type="button" hidden><i data-lucide="download"></i> <span>Install app</span></button>
         <button id="install-dismiss" class="button">Not now</button>
-        <button id="install-confirm" class="button primary" type="button" hidden><i data-lucide="download"></i> Install app</button>
       </form>
+      <p id="install-status" role="status"></p>
     </dialog>
 
     <dialog id="update-dialog" aria-labelledby="update-title" aria-describedby="update-detail">

@@ -6,7 +6,7 @@ Play [Tic Tac Toe](https://tictactoe.chrisawad.com/).
 - **Local PvP** — pick names and colors and pass the screen between turns.
 - **Play Online** — create a private room, join a five-character invite, or find a public 3×3 match. Both players vote for a rematch. The score carries over and the other player takes X.
 
-On a rematch, players swap X and O while keeping their chosen colors and match scores. AI Battle and Local PvP save independently on the device and work offline after the first visit. Choose **Install app** for a standalone window or home-screen app.
+On a rematch, players swap X and O while keeping their chosen colors and match scores. AI Battle and Local PvP save independently on the device and work offline after the first visit. Choose **Install** to open the installation dialog.
 
 ## Run locally
 
