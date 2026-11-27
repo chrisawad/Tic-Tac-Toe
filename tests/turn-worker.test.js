@@ -34,6 +34,7 @@ beforeEach(() => {
   };
   upstream = vi.fn(async () => Response.json({ iceServers, extra: 'private' }));
   siteverify = vi.fn(async (_url, options) => {
+    expect(options.redirect).toBe('manual');
     const token = options.body.get('response');
     const [match, session] = token.split('.');
     return Response.json({ success: true, action: 'game_relay', hostname: 'game.example',

@@ -12,7 +12,7 @@ async function verifyPlayer(input, secret, hostname, ip) {
   const expected = await digest(match + ':' + session);
   const result = await fetch(turnstileURL, {
     method: 'POST', body: new URLSearchParams({ secret, response: turnstileToken, remoteip: ip }),
-    redirect: 'error', signal: AbortSignal.timeout(5000),
+    redirect: 'manual', signal: AbortSignal.timeout(5000),
   });
   if (!result.ok) throw new Error('Verification unavailable');
   const proof = await result.json();
