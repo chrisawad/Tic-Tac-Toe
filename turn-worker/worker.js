@@ -35,7 +35,7 @@ async function issueCredentials(keyId, token, headers) {
     const result = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ttl: 7200 }),
+      body: JSON.stringify({ ttl: 3600 }),
       redirect: 'manual',
       signal: AbortSignal.timeout(10_000),
     });

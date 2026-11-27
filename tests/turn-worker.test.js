@@ -121,7 +121,7 @@ it('binds tickets to the match and seat and reserves each mint once across concu
   }
   expect(upstream).toHaveBeenCalledTimes(2);
   expect(upstream).toHaveBeenCalledWith('https://rtc.live.cloudflare.com/v1/turn/keys/test-id/credentials/generate-ice-servers',
-    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-api-key' }), redirect: 'manual', body: '{"ttl":7200}' }));
+    expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer test-api-key' }), redirect: 'manual', body: '{"ttl":3600}' }));
 });
 
 it('rejects expired tickets and matches without waiting for cleanup, then frees idle storage', async () => {
