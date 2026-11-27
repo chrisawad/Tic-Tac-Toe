@@ -622,14 +622,13 @@ for (const retryThroughRelay of isolatedRelayTest ? [false, true] : [Boolean(tes
           const seat = playerPage === page ? 'host' : 'guest';
           await playerPage.route("https://challenges.cloudflare.com/turnstile/v0/api.js*", route => route.fulfill({
             contentType: "text/javascript", body: `window.turnstile = {
-              ready(run) { run(); },
               render(element, options) {
                 if (options.sitekey !== 'fixture-sitekey' || options.action !== 'game_relay') throw Error('Unexpected widget');
                 queueMicrotask(() => options.callback(options.cData));
                 return 'widget';
               },
               remove() {}
-            }`,
+            }; window[new URL(document.currentScript.src).searchParams.get('onload')]();`,
           }));
           await playerPage.route((testWorker || '**/test-turn-credentials').replace(/\/$/, '') + '/**', async route => {
             requests++;

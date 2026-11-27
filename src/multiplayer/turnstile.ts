@@ -9,7 +9,6 @@ type WidgetOptions = {
   "timeout-callback": () => void;
 };
 type Turnstile = {
-  ready(callback: () => void): void;
   render(container: HTMLElement, options: WidgetOptions): string;
   remove(widget: string): void;
 };
@@ -19,21 +18,25 @@ let verifying = false;
 function loadTurnstile() {
   if (loading) return loading;
   loading = new Promise<Turnstile>((resolve, reject) => {
+    const host = window as Window & { turnstile?: Turnstile; onGameRelayTurnstileReady?: () => void };
     const script = document.createElement("script");
     const fail = () => {
       clearTimeout(timer);
-      script.onload = script.onerror = null;
+      delete host.onGameRelayTurnstileReady;
+      script.onerror = null;
       script.remove();
       reject(new Error("Could not load player verification."));
     };
     const timer = window.setTimeout(fail, 15000);
-    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onGameRelayTurnstileReady";
     script.async = true;
     script.onerror = fail;
-    script.onload = () => {
-      const api = (window as Window & { turnstile?: Turnstile }).turnstile;
-      if (!api) { fail(); return; }
-      api.ready(() => { clearTimeout(timer); resolve(api); });
+    host.onGameRelayTurnstileReady = () => {
+      if (!host.turnstile) { fail(); return; }
+      clearTimeout(timer);
+      script.onerror = null;
+      delete host.onGameRelayTurnstileReady;
+      resolve(host.turnstile);
     };
     document.head.append(script);
   }).catch(error => { loading = undefined; throw error; });
