@@ -1,14 +1,13 @@
 import type Peer from "peerjs";
 import type { DataConnection } from "peerjs";
 import { NoHostReply, RoomError } from "./feedback";
-import { defaultRtcConfig, relayConfiguration, trackConnectionSetup } from "./rtc";
+import { defaultRtcConfig, directRtcConfig, trackConnectionSetup } from "./rtc";
+import { relayFailureMessage, requestMatchRelay } from "./relay-admission";
 
-export async function prepareNetwork(endpoint: string | undefined, signal: AbortSignal) {
-  if (!endpoint) return { config: defaultRtcConfig, managedRelay: false, unavailable: false };
-  const relay = await relayConfiguration(endpoint, signal);
-  return { ...relay, managedRelay: !relay.unavailable };
+export function prepareNetwork(endpoint?: string) {
+  return { config: endpoint ? directRtcConfig : defaultRtcConfig, endpoint };
 }
-export type RoomNetwork = Awaited<ReturnType<typeof prepareNetwork>>;
+export type RoomNetwork = ReturnType<typeof prepareNetwork>;
 
 // Installed copies can share a saved lobby. Only its owning window may reuse its registration token.
 export async function holdHostLock(namespace: string, token: string): Promise<() => void> {
@@ -30,6 +29,7 @@ export async function holdHostLock(namespace: string, token: string): Promise<()
 }
 
 type Handshake<T> = {
+  seatSecret?: string;
   open?: (channel: DataConnection) => void;
   receive: (data: unknown) => T | undefined;
 };
@@ -41,15 +41,15 @@ export async function connectRoom<T>(
   peer: Peer, target: string, protocol: string, type: "find" | "join", network: RoomNetwork,
   signal: AbortSignal, handshake: Handshake<T>, status: (message: string) => void,
 ) {
-  function attempt(relayOnly: boolean): Promise<{ channel: DataConnection; reply: T }> {
+  function attempt(relay?: { config: RTCConfiguration; match: string }): Promise<{ channel: DataConnection; reply: T }> {
     return new Promise((resolve, reject) => {
       signal.throwIfAborted();
       const original = peer.options.config;
       let ch: DataConnection;
       try {
-        if (relayOnly) peer.options.config = { ...network.config, iceTransportPolicy: "relay" };
+        if (relay) peer.options.config = relay.config;
         ch = peer.connect(target, {
-          reliable: true, serialization: "json", metadata: { app: protocol, type },
+          reliable: true, serialization: "json", metadata: { app: protocol, type, ...(relay && { relayMatch: relay.match }) },
         });
       } finally {
         // PeerJS constructs the RTCPeerConnection inside connect().
@@ -57,7 +57,7 @@ export async function connectRoom<T>(
       }
       const events = new AbortController();
       const pc = ch.peerConnection;
-      const explain = trackConnectionSetup(ch, false, events.signal, network.unavailable);
+      const explain = trackConnectionSetup(ch, false, events.signal);
       let answered = !!pc.remoteDescription;
       let opened = false;
       let settled = false;
@@ -88,7 +88,7 @@ export async function connectRoom<T>(
       function connectionFailed() {
         if (settled) return;
         answered ||= !!pc.remoteDescription;
-        if (answered && !opened && network.managedRelay && !relayOnly) fail(new RetryWithRelay(explain()));
+        if (answered && !opened && network.endpoint && !relay) fail(new RetryWithRelay(explain()));
         else fail(answered || opened ? new RoomError(explain()) : new NoHostReply(explain()));
       }
       function canceled() { fail(signal.reason); }
@@ -120,10 +120,13 @@ export async function connectRoom<T>(
       ch.on("error", connectionFailed);
     });
   }
-  try { return await attempt(false); }
+  try { return await attempt(); }
   catch (error) {
     if (!(error instanceof RetryWithRelay) || signal.aborted) throw error;
     status("Room found. Retrying through the backup relay…");
-    return attempt(true);
+    let relay;
+    try { relay = await requestMatchRelay(peer, target, network.endpoint!, protocol, type, signal, handshake.seatSecret); }
+    catch { signal.throwIfAborted(); throw new RoomError(relayFailureMessage); }
+    return attempt(relay);
   }
 }

@@ -3,6 +3,12 @@
   "main": "worker.js",
   "compatibility_date": "2026-11-21",
   "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "ADMISSIONS", "class_name": "TurnAdmissions" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TurnAdmissions"] }
+  ],
   "vars": {
     "GAME_ORIGIN": "https://chrisawad.github.io"
   },

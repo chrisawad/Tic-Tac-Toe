@@ -2,6 +2,7 @@ import Peer, { type DataConnection, type PeerOptions } from "peerjs";
 import { createRoomFeedback, RoomError } from "./feedback";
 import type { HostLobby } from "./lobby-store";
 import { connectRoom, prepareNetwork, holdHostLock, type RoomNetwork } from "./transport";
+import { receiveMatchRelay } from "./relay-admission";
 import { observeConnectionRoute, type ConnectionRoute } from "./connection-route";
 import { createRematchRule } from "./rematch";
 import type { LobbySettings, RoomPersistence } from "./persistence";
@@ -254,6 +255,9 @@ export function createAuthoritativeMultiplayer<Player extends object, Settings, 
     }
     private bindPeer(peer: Peer) {
       peer.on("connection", ch => {
+        if (receiveMatchRelay(peer, ch, rules.relayUrl, protocol, "join", this.peerEvents.signal, () =>
+          this.data.seat === "Player1" && this.peer === peer && !this.closed && !this.parked &&
+          this.data.room.status !== "abandoned" ? this.data.ticket : undefined)) return;
         if (this.peer === peer) this.incoming(ch);
         else ch.close();
       });
@@ -350,7 +354,7 @@ export function createAuthoritativeMultiplayer<Player extends object, Settings, 
           }
           if (latest) this.data = latest;
         }
-        this.network = await prepareNetwork(rules.relayUrl, attempt.signal);
+        this.network = prepareNetwork(rules.relayUrl);
         attempt.signal.throwIfAborted();
         const host = this.data.seat === "Player1";
         const peer = await openPeer(this.network, host ? hostId(this.data.room.code) : undefined,
@@ -428,6 +432,8 @@ export function createAuthoritativeMultiplayer<Player extends object, Settings, 
         if (e.type !== "peer-unavailable" && e.type !== "webrtc") unlist();
       });
       queue.on("connection", (ch) => {
+        if (receiveMatchRelay(queue, ch, rules.relayUrl, protocol, "find", this.lifetime.signal, () =>
+          this.alias === queue && this.data.room.status === "waiting" ? "" : undefined)) return;
         if (ch.metadata?.app !== protocol || ch.metadata?.type !== "find") {
           ch.close();
           return;
@@ -613,6 +619,7 @@ export function createAuthoritativeMultiplayer<Player extends object, Settings, 
       try {
         const { channel, reply } = await connectRoom(peer, hostId(this.data.room.code), protocol, "join",
           this.network, this.peerEvents.signal, {
+            seatSecret: this.data.ticket,
             open: ch => send(ch, { type: "hello", ticket: this.data.ticket, player: this.me, heartbeat: true, mutualRematch: true }),
             receive,
           }, message => {
@@ -778,7 +785,7 @@ export function createAuthoritativeMultiplayer<Player extends object, Settings, 
     try {
       if (action === "public" || action === "create" || saved?.seat === "Player1")
         releaseSeat = await holdHostLock(store.namespace, hostToken);
-      const network = await prepareNetwork(rules.relayUrl, setup.signal);
+      const network = prepareNetwork(rules.relayUrl);
       setup.signal.throwIfAborted();
       if (action === "public") {
         // Make the game endpoint available before advertising the queue alias.

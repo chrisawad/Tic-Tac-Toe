@@ -57,9 +57,9 @@ Both devices receive `start` with profiles in host/guest order. The host occupie
 
 ## Share the relay
 
-Pass the public HTTPS credential Worker URL in `rules.relayUrl` to enable managed TURN. The module requests temporary credentials when hosting or joining and retains them in memory. Without that setting it uses the transport's default ICE configuration. A temporary credential-service outage still allows direct play.
+Pass the public HTTPS credential Worker URL in `rules.relayUrl` to enable managed TURN. Direct connections use STUN. If the remote peer answers but ICE cannot open a data channel, both browsers use signaling to register a two-seat match with the Worker. Each browser redeems its own single-use ticket, keeps its temporary TURN credentials in memory and applies them to that connection. Reconnecting to an occupied seat also requires the saved guest's proof. Direct play continues if the Worker is unavailable. Without a configured Worker, the module uses the transport's default ICE configuration.
 
-Games on the same GitHub Pages origin can use the same Worker. For games on different origins, configure the Worker's `GAME_ORIGINS` with a comma-separated list of exact origins, including the original game. The existing `GAME_ORIGIN` remains the default when the list is absent. Keep `TURN_KEY_ID` and `TURN_API_TOKEN` in the Worker’s secret settings.
+Games on the same GitHub Pages origin can use the same Worker. For games on different origins, configure the Worker's `GAME_ORIGINS` with a comma-separated list of exact origins, including the original game. The existing `GAME_ORIGIN` remains the default when the list is absent. Keep `TURN_KEY_ID` and `TURN_API_TOKEN` in the Worker’s secret settings. Deploy the versioned admission routes in Tic-Tac-Toe’s `turn-worker/`. The old unauthenticated credential route must be disabled at the Worker. Anonymous clients can still form matches, so apply server-side issuance limits and monitor TURN bandwidth.
 
 ## Public matchmaking and resumable matches
 

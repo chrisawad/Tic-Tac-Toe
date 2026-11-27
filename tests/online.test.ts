@@ -3,17 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultPlayers } from '../src/game';
 import { ticTacToeOnline } from '../src/online';
 import { openPeerRoom } from '../src/multiplayer/room';
+import { requestMatchRelay, relayFailureMessage } from '../src/multiplayer/relay-admission';
 
 const { createPeer } = vi.hoisted(() => ({ createPeer: vi.fn() }));
 vi.mock('peerjs', () => ({
   util: { defaultConfig: { iceServers: [{ urls: 'turn:relay.example', username: 'host', credential: 'sample' }] } },
   Peer: class { constructor(id: string, options: { config: RTCConfiguration; token?: string }) { return createPeer(id, options); } },
 }));
+vi.mock('../src/multiplayer/relay-admission', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/multiplayer/relay-admission')>(), requestMatchRelay: vi.fn(),
+}));
 
 function attempt(serviceConnected = true) {
   const rtc = Object.assign(new EventTarget(), { remoteDescription: null as { type: 'answer' } | null, iceConnectionState: 'new' });
-  const channel = Object.assign(new EventEmitter(), { peerConnection: rtc, open: false, send: vi.fn() });
-  const peer = Object.assign(new EventEmitter(), { open: serviceConnected, destroy: vi.fn(), connect: () => channel });
+  const channel = Object.assign(new EventEmitter(), { peerConnection: rtc, open: false, send: vi.fn(), close: vi.fn() });
+  const peer = Object.assign(new EventEmitter(), { open: serviceConnected, options: { config: {} }, destroy: vi.fn(), connect: () => channel });
   createPeer.mockReturnValue(peer);
   const failure = vi.fn();
   const start = vi.fn();
@@ -67,17 +71,17 @@ describe('room failure messages', () => {
     room.close();
   });
 
-  it('can still start a direct connection when relay credential issuance fails', async () => {
+  it('tries a direct connection before admission and explains a rejected fallback', async () => {
     vi.stubEnv('VITE_TURN_WORKER_URL', 'https://worker.example/');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
-    const { peer, rtc, channel, failure } = attempt(false);
+    vi.mocked(requestMatchRelay).mockClear().mockRejectedValueOnce(new Error('unavailable'));
+    const { peer, rtc, channel, failure } = attempt();
     await vi.waitFor(() => expect(peer.listenerCount('open')).toBe(1));
-    peer.emit('open');
     const options = createPeer.mock.lastCall![1];
     expect(options.config.iceServers).toEqual([{ urls: expect.arrayContaining(['stun:stun.cloudflare.com:3478']) }]);
+    expect(requestMatchRelay).not.toHaveBeenCalled();
     rtc.remoteDescription = { type: 'answer' };
     channel.emit('close');
-    expect(failure).toHaveBeenCalledWith(expect.stringContaining('temporary access to the backup relay'), undefined);
+    await vi.waitFor(() => expect(failure).toHaveBeenCalledWith(relayFailureMessage, undefined));
   });
 
   it.each(['error', 'silent close', 'new offer'])('keeps the invite open across a pending guest’s %s', issue => {
@@ -113,14 +117,16 @@ describe('room failure messages', () => {
 
   it.each(['exhausted', 'cancelled'])('bounds the relay retry for a known room when %s', async outcome => {
     const game = { ...ticTacToeOnline, relayUrl: 'https://worker.example/' };
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
-      iceServers: [{ urls: 'turn:relay.example:3478', username: 'test', credential: 'test' }],
-    })));
+    const approved = { match: 'relay-match', config: { iceTransportPolicy: 'relay' as const } };
+    vi.mocked(requestMatchRelay).mockClear().mockResolvedValue(approved);
     const first = pendingChannel('host');
     const second = pendingChannel('host');
     const peer = Object.assign(new EventEmitter(), {
       open: true, destroy: vi.fn(), options: { config: {} as RTCConfiguration },
-      connect: vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second),
+      connect: vi.fn().mockReturnValueOnce(first).mockImplementationOnce(() => {
+        expect(peer.options.config).toEqual(approved.config);
+        return second;
+      }),
     });
     createPeer.mockClear().mockReturnValue(peer);
     const handlers = { waiting: vi.fn(), status: vi.fn(), start: vi.fn(), action: vi.fn(), failure: vi.fn() };
@@ -133,13 +139,14 @@ describe('room failure messages', () => {
     expect(handlers.status).toHaveBeenCalledExactlyOnceWith('Room found. Retrying through the backup relay…');
     expect(handlers.failure).not.toHaveBeenCalled();
     if (outcome === 'cancelled') guest.close();
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(requestMatchRelay).toHaveBeenCalledOnce();
     if (outcome === 'cancelled') {
       expect(peer.connect).toHaveBeenCalledOnce();
       expect(handlers.failure).not.toHaveBeenCalled();
     } else {
-      expect(peer.options.config.iceTransportPolicy).toBe('relay');
-      expect(peer.connect.mock.calls[1]).toEqual(peer.connect.mock.calls[0]);
+      expect(peer.options.config.iceTransportPolicy).not.toBe('relay');
+      expect(peer.connect.mock.calls[1][1].metadata).toMatchObject({ type: 'join', relayMatch: approved.match });
       second.emit('error', new Error('failed'));
       vi.advanceTimersByTime(60_000);
       expect(peer.connect).toHaveBeenCalledTimes(2);

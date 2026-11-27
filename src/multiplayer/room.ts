@@ -1,7 +1,8 @@
 import { Peer, type DataConnection, type PeerOptions } from 'peerjs';
 import { observeConnectionRoute, type ConnectionRoute } from './connection-route';
 import { newRoomCode, type createRoomCodes } from './invite';
-import { defaultRtcConfig, trackConnectionSetup } from './rtc';
+import { trackConnectionSetup } from './rtc';
+import { receiveMatchRelay, relayFailureMessage, requestMatchRelay } from './relay-admission';
 import { prepareNetwork } from './transport';
 
 export type Seat = 0 | 1;
@@ -61,8 +62,8 @@ export function openPeerRoom<Profile, Action extends object>(
   let playing = false;
   let attempts = 0;
   const listeners = new AbortController();
-  let rtcConfig = defaultRtcConfig;
-  let relayUnavailable = false;
+  const network = prepareNetwork(game.relayUrl);
+  let relay: { config: RTCConfiguration; match: string } | undefined;
   let retriedRelay = false;
   let sentHello = false;
   let hasAnswer = () => false;
@@ -100,12 +101,13 @@ export function openPeerRoom<Profile, Action extends object>(
         handlers.status?.('Room is still open. Waiting for your friend to reconnect…');
         return;
       }
-      if (hasAnswer() && !sentHello && game.relayUrl && !relayUnavailable && !retriedRelay) {
+      if (hasAnswer() && !sentHello && game.relayUrl && !retriedRelay) {
         retriedRelay = true;
         discardChannel();
         // The new channel uses the same guest registration and fresh ICE checks.
-        peer.options.config = { ...rtcConfig, iceTransportPolicy: 'relay' };
-        countdown = window.setTimeout(connectToHost, 1000);
+        void requestMatchRelay(peer, prefix + code, game.relayUrl, game.namespace, 'join', listeners.signal)
+          .then(approved => { if (!closed) { relay = approved; connectToHost(); } })
+          .catch(() => { if (!closed) fail(relayFailureMessage); });
         handlers.status?.('Room found. Retrying through the backup relay…');
         return;
       }
@@ -124,8 +126,12 @@ export function openPeerRoom<Profile, Action extends object>(
   }
   function connectToHost() {
     if (closed || !code) return;
-    try { useConnection(peer.connect(prefix + code, { reliable: true, serialization: 'json' })); }
-    catch { fail('The browser couldn’t start the game connection. Try joining again.'); }
+    try {
+      if (relay) peer.options.config = relay.config;
+      useConnection(peer.connect(prefix + code, { reliable: true, serialization: 'json',
+        metadata: { app: game.namespace, type: 'join', ...(relay && { relayMatch: relay.match }) } }));
+    } catch { fail('The browser couldn’t start the game connection. Try joining again.'); }
+    finally { peer.options.config = network.config; }
   }
   function timeLimit(onTimeout: () => void) {
     cancelTimeout();
@@ -142,7 +148,7 @@ export function openPeerRoom<Profile, Action extends object>(
     hasAnswer = () => Boolean(pc.remoteDescription);
     sentHello = false;
     channelEvents = new AbortController();
-    joinFailure = trackConnectionSetup(connection, host, channelEvents.signal, relayUnavailable);
+    joinFailure = trackConnectionSetup(connection, host, channelEvents.signal);
     timeLimit(() => {
       if (!current()) return;
       // A relay lookup can fail while ICE is still checking a usable direct route.
@@ -221,7 +227,7 @@ export function openPeerRoom<Profile, Action extends object>(
 
   function register(roomCode: string) {
     attempts++;
-    const options = { ...game.peerOptions, config: rtcConfig };
+    const options = { ...game.peerOptions, config: network.config };
     const registered = hostToken
       ? new Peer(prefix + roomCode, { ...options, token: hostToken })
       : new Peer(prefix + 'guest-' + crypto.randomUUID(), options);
@@ -233,7 +239,12 @@ export function openPeerRoom<Profile, Action extends object>(
       if (hostToken) handlers.waiting(roomCode, hostToken);
       else connectToHost();
     });
-    if (host) registered.on('connection', useConnection);
+    registered.on('connection', connection => {
+      if (receiveMatchRelay(registered, connection, game.relayUrl, game.namespace, 'join', listeners.signal,
+        () => host && !closed && !playing && peer === registered ? '' : undefined)) return;
+      if (host) useConnection(connection);
+      else connection.close();
+    });
     registered.on('error', error => {
       if (closed || registered !== peer || (playing && channel?.open)) return;
       if (host && !restored && error.type === 'unavailable-id' && attempts < 4) {
@@ -265,13 +276,8 @@ export function openPeerRoom<Profile, Action extends object>(
   }
 
   const roomCode = code ?? restored?.code ?? generateCode();
-  async function prepareRoom() {
+  function prepareRoom() {
     cancelTimeout();
-    if (game.relayUrl) {
-      const network = await prepareNetwork(game.relayUrl, listeners.signal);
-      relayUnavailable = network.unavailable;
-      rtcConfig = network.config;
-    }
     if (!closed) {
       try { register(roomCode); }
       catch { fail('The browser couldn’t start the game connection. Refresh the game and try again.'); }

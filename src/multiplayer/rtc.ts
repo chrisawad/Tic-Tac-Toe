@@ -7,13 +7,9 @@ export const defaultRtcConfig: RTCConfiguration = {
 
 const directServers: RTCIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
 
-async function fetchRelayServers(endpoint: string, signal: AbortSignal): Promise<RTCIceServer[]> {
-  const response = await fetch(endpoint, {
-    method: 'POST', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
-    signal: AbortSignal.any([signal, AbortSignal.timeout(4_000)]),
-  });
-  if (!response.ok) throw new Error('Relay credential request failed.');
-  const { iceServers } = await response.json();
+export const directRtcConfig: RTCConfiguration = { ...defaultRtcConfig, iceServers: directServers };
+
+export function relayIceConfiguration(iceServers: unknown): RTCConfiguration {
   const servers: RTCIceServer[] = [];
   if (Array.isArray(iceServers)) {
     for (const server of iceServers) {
@@ -24,19 +20,10 @@ async function fetchRelayServers(endpoint: string, signal: AbortSignal): Promise
     }
   }
   if (!servers.length) throw new Error('No usable relay servers.');
-  return servers;
+  return { ...directRtcConfig, iceServers: [...directServers, ...servers], iceTransportPolicy: 'relay' };
 }
 
-export async function relayConfiguration(endpoint: string, signal: AbortSignal) {
-  try {
-    const relays = await fetchRelayServers(endpoint, signal);
-    return { config: { ...defaultRtcConfig, iceServers: [...directServers, ...relays] }, unavailable: false };
-  } catch {
-    return { config: { ...defaultRtcConfig, iceServers: directServers }, unavailable: true };
-  }
-}
-
-export function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal, relayUnavailable: boolean) {
+export function trackConnectionSetup(connection: DataConnection, host: boolean, signal: AbortSignal) {
   const pc = connection.peerConnection;
   let opened = false;
   let networkConnected = false;
@@ -71,7 +58,6 @@ export function trackConnectionSetup(connection: DataConnection, host: boolean, 
       return 'Room found. The devices reached each other, but the game channel didn’t open. Keep both games on screen and try joining again.';
     }
     if (relayIssue && !gatheredRelay) return `Room found, but no direct connection opened. ${relayIssue} Try joining again.`;
-    if (relayUnavailable) return 'Room found, but no direct connection opened. This device couldn’t get temporary access to the backup relay. Try joining again in a minute.';
     return 'Room found, but the devices couldn’t establish a game connection. Keep both games open and try joining again.';
   };
 }

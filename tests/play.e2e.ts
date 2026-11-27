@@ -1,4 +1,5 @@
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { openPublicLink, publicGameUrl, publicInvite } from './invite-links';
 
 const square = (page: Page, index: number) => page.getByRole('button', { name: new RegExp('^Square ' + (index + 1) + ',') });
@@ -600,70 +601,110 @@ const testRelay = process.env.TEST_TURN_URL;
 const liveRelay = process.env.LIVE_TURN_TEST === '1';
 const requireRelay = Boolean(testRelay) || liveRelay;
 const testWorker = testRelay && process.env.TEST_TURN_WORKER_URL;
-const retryThroughRelay = Boolean(testWorker) || liveRelay;
-const routeTest = retryThroughRelay ? 'a failed first connection automatically recovers through the relay'
-  : requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server';
-test(routeTest, async ({ page, playwright, isMobile, baseURL }) => {
-  test.skip(!process.env.LIVE_ROOM_TEST, 'Live local network connection test');
-  test.setTimeout(65_000);
-  const secondBrowser = await playwright.chromium.launch();
-  try {
-    const guest = await secondBrowser.newPage({ isMobile });
-    let credentialRequests = 0;
-    for (const playerPage of [page, guest]) {
-      const servers = [{ urls: testRelay || 'turn:relay.invalid:3478', username: process.env.TEST_TURN_USER || 'test', credential: process.env.TEST_TURN_PASSWORD || 'test' }];
-      const config: RTCConfiguration = {};
-      if (requireRelay && !retryThroughRelay) config.iceTransportPolicy = 'relay';
-      if (testWorker) {
-        await playerPage.route(testWorker, route => {
-          expect(route.request().method()).toBe('POST');
-          credentialRequests++;
-          return route.fulfill({ json: { iceServers: servers }, headers: { 'Access-Control-Allow-Origin': '*' } });
-        });
-      } else if (!liveRelay) {
-        config.iceServers = servers;
-      }
-      await playerPage.addInitScript(({ overrides, interruptFirstAnswer }) => {
-        window.RTCPeerConnection = class extends RTCPeerConnection {
-          constructor(config?: RTCConfiguration) {
-            super({ ...config, ...overrides });
-          }
-          override async setRemoteDescription(description: RTCSessionDescriptionInit) {
-            await super.setRemoteDescription(description);
-            if (interruptFirstAnswer && description.type === 'answer') {
-              interruptFirstAnswer = false;
-              Object.defineProperty(this, 'iceConnectionState', { value: 'failed' });
-              this.dispatchEvent(new Event('iceconnectionstatechange'));
+const isolatedRelayTest = !process.env.LIVE_ROOM_TEST && !process.env.PLAY_URL;
+for (const retryThroughRelay of isolatedRelayTest ? [false, true] : [Boolean(testWorker) || liveRelay]) {
+  const routeTest = retryThroughRelay ? 'a failed first connection automatically recovers through the relay'
+    : requireRelay ? 'two browsers show a relayed game connection' : 'two browsers can play directly with an unresolvable relay and no STUN server';
+  test(routeTest, async ({ page, playwright, isMobile, baseURL }) => {
+    test.skip(!isolatedRelayTest && !process.env.LIVE_ROOM_TEST, 'Requires a signaling server');
+    test.setTimeout(65_000);
+    const secondBrowser = await playwright.chromium.launch();
+    try {
+      const guest = await secondBrowser.newPage({ isMobile });
+      let requests = 0, commitment = '', joined = false;
+      const minted = new Set<string>();
+      for (const playerPage of [page, guest]) {
+        const servers = [{ urls: testRelay || 'turn:relay.invalid:3478', username: process.env.TEST_TURN_USER || 'test', credential: process.env.TEST_TURN_PASSWORD || 'test' }];
+        const config: RTCConfiguration = {};
+        if (requireRelay && !retryThroughRelay) config.iceTransportPolicy = 'relay';
+        if (isolatedRelayTest && !retryThroughRelay) config.iceServers = servers;
+        if (testWorker || isolatedRelayTest) {
+          const seat = playerPage === page ? 'host' : 'guest';
+          await playerPage.route((testWorker || '**/test-turn-credentials').replace(/\/$/, '') + '/**', async route => {
+            requests++;
+            const path = new URL(route.request().url()).pathname.split('/').pop();
+            const body = route.request().postDataJSON();
+            const ok = (json: object) => route.fulfill({ json });
+            if (path === 'matches' && seat === 'host' && body.game === 'chrisawad-tic-tac-toe-v2' && body.hostPeer !== body.guestPeer) {
+              commitment = body.guestCommitment;
+              return ok({ match: 'mock-match', session: 'host-session' });
             }
-          }
-        };
-      }, { overrides: config, interruptFirstAnswer: retryThroughRelay && playerPage === guest });
+            if (body.match === 'mock-match' && path === 'join' && seat === 'guest' &&
+                createHash('sha256').update(body.secret).digest('hex') === commitment) {
+              joined = true;
+              return ok({ session: 'guest-session' });
+            }
+            if (body.match === 'mock-match' && body.session === seat + '-session') {
+              if (path === 'ticket') return joined ? ok({ ticket: seat + '-ticket' }) : route.fulfill({ status: 409 });
+              if (path === 'credentials' && joined && body.ticket === seat + '-ticket' && !minted.has(seat)) {
+                minted.add(seat);
+                return ok({ iceServers: isolatedRelayTest ? [{ ...servers[0], username: seat }] : servers });
+              }
+            }
+            return route.fulfill({ status: 403 });
+          });
+        } else if (!liveRelay) {
+          config.iceServers = servers;
+        }
+        await playerPage.addInitScript(({ overrides, interruptFirstAnswer, simulateRelay }) => {
+          const configFor = (config?: RTCConfiguration) => {
+            if (simulateRelay && config?.iceTransportPolicy === 'relay') {
+              document.documentElement.dataset.relaySeat = config.iceServers?.find(s => s.username)?.username;
+              return { iceTransportPolicy: 'all' as const, iceServers: [] };
+            }
+            return { ...config, ...overrides };
+          };
+          window.RTCPeerConnection = class extends RTCPeerConnection {
+            constructor(config?: RTCConfiguration) {
+              super(configFor(config));
+            }
+            override setConfiguration(config?: RTCConfiguration) {
+              super.setConfiguration(configFor(config));
+            }
+            override async setRemoteDescription(description: RTCSessionDescriptionInit) {
+              await super.setRemoteDescription(description);
+              if (interruptFirstAnswer && description.type === 'answer') {
+                interruptFirstAnswer = false;
+                Object.defineProperty(this, 'iceConnectionState', { value: 'failed' });
+                this.dispatchEvent(new Event('iceconnectionstatechange'));
+              }
+            }
+          };
+        }, { overrides: config, interruptFirstAnswer: retryThroughRelay && playerPage === guest, simulateRelay: isolatedRelayTest });
+      }
+      await visit(page);
+      await mode(page, 'online').click();
+      await page.getByRole('button', { name: 'Create private room' }).click();
+      await expect(page.locator('#room-qr')).toBeVisible();
+      expect(requests).toBe(0);
+      await openPublicLink(guest, await page.locator('#invite-link').inputValue(), baseURL!);
+      await dismissInstall(guest);
+      await guest.getByRole('button', { name: 'Join room' }).click();
+      if (retryThroughRelay) await expect(guest.locator('#room-status')).toContainText('Retrying through the backup relay');
+      await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
+      for (const device of [page, guest]) {
+        await expect(device.locator('#connection-route')).toHaveText(requireRelay ? 'Via relay' : 'Direct');
+        await expect(device.locator('#connection-route')).toBeInViewport({ ratio: 1 });
+      }
+      if (retryThroughRelay && (testWorker || isolatedRelayTest)) {
+        expect([...minted].sort()).toEqual(['guest', 'host']);
+        if (isolatedRelayTest) {
+          await expect(page.locator('html')).toHaveAttribute('data-relay-seat', 'host');
+          await expect(guest.locator('html')).toHaveAttribute('data-relay-seat', 'guest');
+        }
+      } else if (isolatedRelayTest) expect(requests).toBe(0);
+      if (isMobile) {
+        await page.setViewportSize({ width: 568, height: 320 });
+        await expect(page.locator('#connection-route')).toBeInViewport({ ratio: 1 });
+        await expect(page.locator('#board')).toBeInViewport({ ratio: 1 });
+      }
+      await square(page, 4).click();
+      await expect(guest.locator('#turn-status')).toHaveText('Your turn · O');
+    } finally {
+      await secondBrowser.close();
     }
-    await visit(page);
-    await mode(page, 'online').click();
-    await page.getByRole('button', { name: 'Create private room' }).click();
-    await expect(page.locator('#room-qr')).toBeVisible();
-    await openPublicLink(guest, await page.locator('#invite-link').inputValue(), baseURL!);
-    await dismissInstall(guest);
-    await guest.getByRole('button', { name: 'Join room' }).click();
-    if (retryThroughRelay) await expect(guest.locator('#room-status')).toContainText('Retrying through the backup relay');
-    await expect(page.locator('#turn-status')).toHaveText('Your turn · X', { timeout: 42_000 });
-    for (const device of [page, guest]) {
-      await expect(device.locator('#connection-route')).toHaveText(requireRelay ? 'Via relay' : 'Direct');
-      await expect(device.locator('#connection-route')).toBeInViewport({ ratio: 1 });
-    }
-    if (testWorker) expect(credentialRequests).toBe(2);
-    if (isMobile) {
-      await page.setViewportSize({ width: 568, height: 320 });
-      await expect(page.locator('#connection-route')).toBeInViewport({ ratio: 1 });
-      await expect(page.locator('#board')).toBeInViewport({ ratio: 1 });
-    }
-    await square(page, 4).click();
-    await expect(guest.locator('#turn-status')).toHaveText('Your turn · O');
-  } finally {
-    await secondBrowser.close();
-  }
-});
+  });
+}
 
 test('real online room carries a game and rematch between two browser contexts', async ({ page, browser, baseURL }) => {
   test.skip(!process.env.LIVE_ROOM_TEST, 'Live online room smoke test');
