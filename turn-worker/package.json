@@ -4,6 +4,8 @@
   "type": "module",
   "cloudflare": {
     "bindings": {
+      "TURNSTILE_SITE_KEY": { "description": "Enter the public site key for the games' managed Turnstile widget." },
+      "TURNSTILE_SECRET_KEY": { "description": "Enter its private Turnstile Siteverify secret." },
       "TURN_KEY_ID": { "description": "Enter the TURN Token ID from Cloudflare Realtime." },
       "TURN_API_TOKEN": { "description": "Enter the API key issued alongside that TURN Token ID." }
     }

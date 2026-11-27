@@ -620,6 +620,17 @@ for (const retryThroughRelay of isolatedRelayTest ? [false, true] : [Boolean(tes
         if (isolatedRelayTest && !retryThroughRelay) config.iceServers = servers;
         if (testWorker || isolatedRelayTest) {
           const seat = playerPage === page ? 'host' : 'guest';
+          await playerPage.route("https://challenges.cloudflare.com/turnstile/v0/api.js*", route => route.fulfill({
+            contentType: "text/javascript", body: `window.turnstile = {
+              ready(run) { run(); },
+              render(element, options) {
+                if (options.sitekey !== 'fixture-sitekey' || options.action !== 'game_relay') throw Error('Unexpected widget');
+                queueMicrotask(() => options.callback(options.cData));
+                return 'widget';
+              },
+              remove() {}
+            }`,
+          }));
           await playerPage.route((testWorker || '**/test-turn-credentials').replace(/\/$/, '') + '/**', async route => {
             requests++;
             const path = new URL(route.request().url()).pathname.split('/').pop();
@@ -627,16 +638,17 @@ for (const retryThroughRelay of isolatedRelayTest ? [false, true] : [Boolean(tes
             const ok = (json: object) => route.fulfill({ json });
             if (path === 'matches' && seat === 'host' && body.game === 'chrisawad-tic-tac-toe-v2' && body.hostPeer !== body.guestPeer) {
               commitment = body.guestCommitment;
-              return ok({ match: 'mock-match', session: 'host-session' });
+              return ok({ match: 'mock-match', session: 'host-session', sitekey: 'fixture-sitekey' });
             }
             if (body.match === 'mock-match' && path === 'join' && seat === 'guest' &&
                 createHash('sha256').update(body.secret).digest('hex') === commitment) {
               joined = true;
-              return ok({ session: 'guest-session' });
+              return ok({ session: 'guest-session', sitekey: 'fixture-sitekey' });
             }
             if (body.match === 'mock-match' && body.session === seat + '-session') {
               if (path === 'ticket') return joined ? ok({ ticket: seat + '-ticket' }) : route.fulfill({ status: 409 });
-              if (path === 'credentials' && joined && body.ticket === seat + '-ticket' && !minted.has(seat)) {
+              if (path === 'credentials' && joined && body.ticket === seat + '-ticket' &&
+                  body.turnstileToken === createHash('sha256').update(body.match + ':' + body.session).digest('hex') && !minted.has(seat)) {
                 minted.add(seat);
                 return ok({ iceServers: isolatedRelayTest ? [{ ...servers[0], username: seat }] : servers });
               }

@@ -16,7 +16,7 @@ function validPeer(value) {
 function isUUID(value) {
   return typeof value === 'string' && /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i.test(value);
 }
-async function digest(secret) {
+export async function digest(secret) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)));
   return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
 }
@@ -37,6 +37,7 @@ export class TurnAdmissions {
         id TEXT PRIMARY KEY, match_id TEXT NOT NULL, seat TEXT NOT NULL, expires INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS ticket_expiry ON tickets(expires);
+      CREATE TABLE IF NOT EXISTS spent_proofs (hash TEXT PRIMARY KEY, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS usage (kind TEXT NOT NULL, ip TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS usage_time ON usage(kind, at);
       CREATE INDEX IF NOT EXISTS usage_ip ON usage(kind, ip, at);
@@ -46,6 +47,7 @@ export class TurnAdmissions {
   prune(now) {
     this.sql.exec('DELETE FROM tickets WHERE expires <= ?', now);
     this.sql.exec('DELETE FROM matches WHERE expires <= ?', now);
+    this.sql.exec('DELETE FROM spent_proofs WHERE expires <= ?', now);
     for (const kind of ['create', 'redeem']) {
       this.sql.exec('DELETE FROM usage WHERE kind = ? AND at <= ?', kind, now - limits[kind].window);
     }
@@ -122,7 +124,12 @@ export class TurnAdmissions {
       const [valid] = this.sql.exec('SELECT 1 FROM tickets WHERE id = ? AND match_id = ? AND seat = ? AND expires > ?',
         input.ticket, match.id, seat, now);
       if (!valid) return denied();
+      // Siteverify replay detection can take time to converge between regions.
+      if (typeof input.proofHash !== 'string') return denied();
+      const [spent] = this.sql.exec('SELECT 1 FROM spent_proofs WHERE hash = ?', input.proofHash);
+      if (spent) return denied();
       if (!this.reserve('redeem', ip, now)) return failure(429, 'Relay credential limit reached.');
+      this.sql.exec('INSERT INTO spent_proofs (hash, expires) VALUES (?, ?)', input.proofHash, match.expires);
       this.sql.exec('DELETE FROM tickets WHERE id = ?', input.ticket);
       return new Response(null, { status: 204 });
     });

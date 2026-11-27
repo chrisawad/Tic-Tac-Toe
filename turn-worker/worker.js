@@ -1,21 +1,37 @@
+import { digest } from './admissions.js';
 export { TurnAdmissions } from './admissions.js';
 
 const routes = new Set(['/v1/matches', '/v1/join', '/v1/ticket', '/v1/credentials']);
 const bodyLimit = 2048;
+const turnstileURL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
-async function readInput(request) {
+async function verifyPlayer(input, secret, hostname, ip) {
+  const { turnstileToken, match, session } = input;
+  if (typeof turnstileToken !== 'string' || !turnstileToken || turnstileToken.length > 2048 ||
+      typeof match !== 'string' || match.length !== 36 || typeof session !== 'string' || session.length !== 36) return false;
+  const expected = await digest(match + ':' + session);
+  const result = await fetch(turnstileURL, {
+    method: 'POST', body: new URLSearchParams({ secret, response: turnstileToken, remoteip: ip }),
+    redirect: 'error', signal: AbortSignal.timeout(5000),
+  });
+  if (!result.ok) throw new Error('Verification unavailable');
+  const proof = await result.json();
+  return proof.success === true && proof.hostname === hostname && proof.action === 'game_relay' && proof.cdata === expected;
+}
+
+async function readInput(request, limit) {
   if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     return { error: 415 };
   }
   const reader = request.body?.getReader();
   if (!reader) return { error: 400 };
-  const bytes = new Uint8Array(bodyLimit);
+  const bytes = new Uint8Array(limit);
   let size = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (size + value.length > bodyLimit) {
+      if (size + value.length > limit) {
         void reader.cancel().catch(() => {});
         return { error: 413 };
       }
@@ -68,13 +84,20 @@ export default {
     if (!ip) return reply(403, 'Client address unavailable.');
     const keyId = env.TURN_KEY_ID?.trim();
     const token = env.TURN_API_TOKEN?.trim();
-    if (!keyId || !token || !env.ADMISSIONS || !env.CREDENTIAL_REQUESTS) return reply(503, 'Relay setup is incomplete.');
+    if (!env.TURNSTILE_SECRET_KEY || !env.TURNSTILE_SITE_KEY || !keyId || !token || !env.ADMISSIONS || !env.CREDENTIAL_REQUESTS) return reply(503, 'Relay setup is incomplete.');
     try {
-      const { input, error } = await readInput(request);
+      const { input, error } = await readInput(request, path === '/v1/credentials' ? bodyLimit + 2048 : bodyLimit);
       if (error) return reply(error, 'Send a small JSON object.');
       if (path === '/v1/matches' || path === '/v1/credentials') {
         const { success } = await env.CREDENTIAL_REQUESTS.limit({ key: path + ':' + ip });
         if (!success) return reply(429, 'Try again in a minute.');
+      }
+      if (path === '/v1/credentials') {
+        if (!(await verifyPlayer(input, env.TURNSTILE_SECRET_KEY, new URL(origin).hostname, ip))) {
+          return reply(403, 'Player verification failed. Try joining again.');
+        }
+        input.proofHash = await digest(input.turnstileToken);
+        delete input.turnstileToken;
       }
       const stub = env.ADMISSIONS.get(env.ADMISSIONS.idFromName('admissions-v1'));
       const admission = await stub.fetch(new Request('https://admissions.internal' + path, {
@@ -82,6 +105,9 @@ export default {
       }));
       if (path === '/v1/credentials' && admission.status === 204) return await issueCredentials(keyId, token, headers);
       if (path === '/v1/credentials' && admission.ok) return reply(503, 'Relay admission is unavailable.');
+      if (admission.ok && (path === '/v1/matches' || path === '/v1/join')) {
+        return Response.json({ ...await admission.json(), sitekey: env.TURNSTILE_SITE_KEY }, { headers });
+      }
       return new Response(admission.body, { status: admission.status, headers: { ...headers, 'Content-Type': 'application/json' } });
     } catch {
       return reply(503, 'Relay admission is unavailable.');

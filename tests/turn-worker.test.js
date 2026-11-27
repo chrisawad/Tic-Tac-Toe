@@ -7,7 +7,7 @@ import { limits } from '../turn-worker/admissions.js';
 const origin = 'https://game.example';
 const ip = '192.0.2.1';
 const iceServers = [{ urls: ['turn:relay.invalid:3478'], username: 'fixture', credential: 'fixture' }];
-let db, storage, env, upstream, now, alarmAt;
+let db, storage, env, upstream, siteverify, now, alarmAt;
 beforeEach(() => {
   db = new DatabaseSync(':memory:');
   now = Date.UTC(2026, 0, 1);
@@ -28,12 +28,19 @@ beforeEach(() => {
   };
   const admissions = new TurnAdmissions({ storage });
   env = {
-    GAME_ORIGIN: origin, TURN_KEY_ID: 'test-id', TURN_API_TOKEN: 'test-api-key',
+    TURNSTILE_SECRET_KEY: 'fixture-secret', TURNSTILE_SITE_KEY: 'fixture-sitekey', GAME_ORIGIN: origin, TURN_KEY_ID: 'test-id', TURN_API_TOKEN: 'test-api-key',
     CREDENTIAL_REQUESTS: { limit: vi.fn(async () => ({ success: true })) },
     ADMISSIONS: { idFromName: key => key, get: () => admissions },
   };
   upstream = vi.fn(async () => Response.json({ iceServers, extra: 'private' }));
-  vi.stubGlobal('fetch', upstream);
+  siteverify = vi.fn(async (_url, options) => {
+    const token = options.body.get('response');
+    const [match, session] = token.split('.');
+    return Response.json({ success: true, action: 'game_relay', hostname: 'game.example',
+      cdata: createHash('sha256').update(match + ':' + session).digest('hex') });
+  });
+  vi.stubGlobal('fetch', (url, options) => url === 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
+    ? siteverify(url, options) : upstream(url, options));
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); db.close(); });
 
@@ -50,7 +57,8 @@ async function create(address = ip) {
   const params = { game: 'test-game', hostPeer: 'host', guestPeer: 'guest', guestCommitment };
   const response = await post('v1/matches', params, address);
   expect(response.status).toBe(200);
-  const { match, session } = await response.json();
+  const { match, session, sitekey } = await response.json();
+  expect(sitekey).toBe('fixture-sitekey');
   return { match, secret, host: { match, session }, params };
 }
 async function pair(address = ip) {
@@ -64,7 +72,8 @@ async function ticket(seat) {
   expect(result.status).toBe(200);
   return { ...seat, ...(await result.json()) };
 }
-const mint = (grant, address) => post('v1/credentials', grant, address);
+const proofFor = seat => seat.match + '.' + seat.session + '.' + crypto.randomUUID();
+const mint = (grant, address) => post('v1/credentials', { ...grant, turnstileToken: proofFor(grant) }, address);
 
 it('denies the old POST, foreign origins, malformed inputs and incomplete deployment', async () => {
   expect((await post('', undefined)).status).toBe(404);
@@ -139,7 +148,7 @@ it('rejects expired tickets and matches without waiting for cleanup, then frees 
   alarmAt = null;
   await restarted.alarm();
   expect(alarmAt).toBeNull();
-  for (const table of ['matches', 'usage', 'tickets']) expect(db.prepare('SELECT count(*) AS n FROM ' + table).get().n).toBe(0);
+  for (const table of ['matches', 'usage', 'tickets', 'spent_proofs']) expect(db.prepare('SELECT count(*) AS n FROM ' + table).get().n).toBe(0);
 });
 
 it('bounds tickets for each seat and match creation per address', async () => {
@@ -173,6 +182,32 @@ it('enforces an IP allowance and a shared rolling ceiling across seats and addre
   expect((await mint(await ticket(other.host), '198.51.100.1')).status).toBe(429);
   now += limits.redeem.window;
   expect((await mint(await ticket((await pair()).host))).status).toBe(200);
+});
+
+it('requires a verified hostname, action and seat, and fails closed on verification errors', async () => {
+  const room = await pair();
+  const grant = await ticket(room.host);
+  const endpoint = 'v1/credentials';
+  expect((await post(endpoint, grant)).status).toBe(403);
+  expect((await post(endpoint, { ...grant, turnstileToken: 'x'.repeat(2049) })).status).toBe(403);
+  expect(siteverify).not.toHaveBeenCalled();
+  const valid = { success: true, hostname: 'game.example', action: 'game_relay',
+    cdata: createHash('sha256').update(grant.match + ':' + grant.session).digest('hex') };
+  for (const invalid of [{ success: false }, { hostname: 'copy.example' }, { action: 'other' }, { cdata: 'wrong' }]) {
+    siteverify.mockResolvedValueOnce(Response.json({ ...valid, ...invalid }));
+    expect((await mint(grant)).status).toBe(403);
+  }
+  siteverify.mockRejectedValueOnce(new Error('unavailable'));
+  expect((await mint(grant)).status).toBe(503);
+  expect((await post(endpoint, { ...grant, turnstileToken: proofFor(room.guest) })).status).toBe(403);
+  expect(upstream).not.toHaveBeenCalled();
+  const token = proofFor(grant);
+  expect((await post(endpoint, { ...grant, turnstileToken: token })).status).toBe(200);
+  const next = await ticket(room.host);
+  expect((await post(endpoint, { ...next, turnstileToken: token })).status).toBe(403);
+  env.TURNSTILE_SECRET_KEY = '';
+  expect((await mint(next)).status).toBe(503);
+  expect(upstream).toHaveBeenCalledTimes(1);
 });
 
 it('bounds total match creation across addresses', async () => {

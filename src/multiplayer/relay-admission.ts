@@ -1,5 +1,6 @@
 import type Peer from "peerjs";
 import type { DataConnection } from "peerjs";
+import { verifyRelayPlayer } from "./turnstile";
 import { relayIceConfiguration } from "./rtc";
 
 type Purpose = "find" | "join";
@@ -8,6 +9,7 @@ type Grant = { peer: string; purpose: Purpose; seat: string; config: RTCConfigur
 const grants = new WeakMap<Peer, Map<string, Grant>>();
 const pending = new WeakMap<Peer, Set<string>>();
 const label = "relay-admission-v1";
+const verificationWindow = 120_000;
 const digestPattern = /^[a-f0-9]{64}$/;
 const failure = () => new Error("The backup relay could not verify this match.");
 export const relayFailureMessage = "Couldn’t get temporary access to the backup relay. Keep both games open, update both games if available, and try joining again.";
@@ -24,7 +26,7 @@ async function post(base: string, path: string, body: Fields, signal: AbortSigna
   return fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer", redirect: "error",
-    signal: AbortSignal.any([signal, AbortSignal.timeout(6000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(path === "credentials" ? 18_000 : 6000)]),
   });
 }
 
@@ -33,9 +35,11 @@ async function result(response: Response) {
   return response.json();
 }
 
-async function redeem(base: string, match: string, session: string, signal: AbortSignal) {
-  if (!session || !match) throw failure();
+async function redeem(base: string, match: string, session: string, sitekey: string, signal: AbortSignal) {
+  if (!session || !match || typeof sitekey !== "string" || !sitekey) throw failure();
   const seat = { match, session };
+  const turnstileToken = await verifyRelayPlayer(sitekey, await digest(match + ":" + session), signal);
+  signal.throwIfAborted();
   let issued = await post(base, "ticket", seat, signal);
   // The host can reach the Worker before the other browser claims its seat.
   while (issued.status === 409) {
@@ -45,7 +49,7 @@ async function redeem(base: string, match: string, session: string, signal: Abor
   }
   const { ticket } = await result(issued);
   if (typeof ticket !== "string" || !ticket) throw failure();
-  const { iceServers } = await result(await post(base, "credentials", { ...seat, ticket }, signal));
+  const { iceServers } = await result(await post(base, "credentials", { ...seat, ticket, turnstileToken }, signal));
   return relayIceConfiguration(iceServers);
 }
 
@@ -75,20 +79,20 @@ function nextReply(peer: Peer, target: string, game: string, commitment: string,
 export async function requestMatchRelay(peer: Peer, target: string, base: string, game: string, purpose: Purpose,
   lifetime: AbortSignal, seatSecret = "") {
   const exchange = new AbortController();
-  const signal = AbortSignal.any([lifetime, exchange.signal, AbortSignal.timeout(25000)]);
+  const signal = AbortSignal.any([lifetime, exchange.signal, AbortSignal.timeout(verificationWindow)]);
   const secret = crypto.randomUUID();
   const commitment = await digest(secret);
   const proof = seatSecret ? await digest(commitment + ":" + seatSecret) : "";
   try {
     const [match] = await Promise.all([
-      nextReply(peer, target, game, commitment, "offer", signal),
+      nextReply(peer, target, game, commitment, "offer", AbortSignal.any([signal, AbortSignal.timeout(25000)])),
       Promise.resolve().then(() => notify(peer, target, { phase: "request", game, purpose, commitment, proof })),
     ]);
     const [readyMatch, config] = await Promise.all([
       nextReply(peer, target, game, commitment, "ready", signal),
       (async () => {
-        const { session } = await result(await post(base, "join", { match, secret }, signal));
-        return redeem(base, match, session, signal);
+        const { session, sitekey } = await result(await post(base, "join", { match, secret }, signal));
+        return redeem(base, match, session, sitekey, signal);
       })(),
     ]);
     if (readyMatch !== match) throw failure();
@@ -123,22 +127,22 @@ export function receiveMatchRelay(peer: Peer, ch: DataConnection, base: string |
   pending.set(peer, active);
   active.add(ch.peer);
   const { commitment } = m;
-  const signal = AbortSignal.any([lifetime, AbortSignal.timeout(25000)]);
+  const signal = AbortSignal.any([lifetime, AbortSignal.timeout(verificationWindow)]);
   const reply = (phase: string, match: string) => notify(peer, ch.peer, { phase, game, commitment, match });
   void (async () => {
     if (expected && await digest(commitment + ":" + expected) !== m.proof) throw failure();
-    const { match, session } = await result(await post(base, "matches", {
+    const { match, session, sitekey } = await result(await post(base, "matches", {
       game, hostPeer: peer.id, guestPeer: ch.peer, guestCommitment: commitment,
     }, signal));
     if (typeof match !== "string" || !match || typeof session !== "string" || !session) throw failure();
     reply("offer", match);
-    const config = await redeem(base, match, session, signal);
+    const config = await redeem(base, match, session, sitekey, signal);
     signal.throwIfAborted();
     if (seat() !== expected) throw failure();
     const available = grants.get(peer) ?? new Map<string, Grant>();
     grants.set(peer, available);
     available.set(match, { peer: ch.peer, purpose, seat: expected, config });
-    setTimeout(() => available.delete(match), 30000);
+    setTimeout(() => available.delete(match), verificationWindow);
     reply("ready", match);
   })().catch(() => {
     if (!lifetime.aborted && peer.open) { try { reply("denied", ""); } catch {} }

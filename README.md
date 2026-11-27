@@ -32,8 +32,9 @@ The browser suite runs two players against a local signaling server and decodes 
 To borrow the complete multiplayer flow for another two-player game, follow the [multiplayer integration guide](src/multiplayer/README.md). The [counter test game](tests/fixtures/counter.ts) uses the same public API with its own profiles and actions.
 
 1. To deploy `public-games-turn` directly, run `pnpm dlx wrangler@4 login` and then `pnpm dlx wrangler@4 deploy --config turn-worker/wrangler.jsonc --keep-vars` from the game repository. The configuration includes the SQLite Durable Object migration for `ADMISSIONS` and the existing `CREDENTIAL_REQUESTS` rate limiter. For a new deployment, add the **TURN Token ID** as `TURN_KEY_ID` and its matching **API key** as `TURN_API_TOKEN` in **Workers & Pages → public-games-turn → Settings → Variables and Secrets**. Set both as **Secret**. You can also use the [GitHub-connected setup](https://deploy.workers.cloudflare.com/?url=https://github.com/chrisawad/Tic-Tac-Toe/tree/main/turn-worker).
-2. Set the game repository’s Actions **variable** `TURN_WORKER_URL` to the Worker’s public HTTPS root URL, then run the Pages deployment. For a local build, set `VITE_TURN_WORKER_URL` to that URL and configure the Worker’s `GAME_ORIGIN` to allow your local origin.
-3. Create or join an online room. A direct connection makes zero Worker requests. When a remote peer answers but the direct data channel fails, the browsers exchange a guest commitment and match ID through signaling. Each browser keeps its own session and redeems a separate ticket for one-hour TURN credentials. Older clients can still play directly and need an update to use this relay.
+2. Create a managed Turnstile widget restricted to the actual game hostname (`chrisawad.github.io` for the current Pages builds). Configure `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` on the Worker. Only the public site key is returned to clients. Use separate Cloudflare testing keys for local development.
+3. Set the game repository’s Actions **variable** `TURN_WORKER_URL` to the Worker’s public HTTPS root URL, then run the Pages deployment. For a local build, set `VITE_TURN_WORKER_URL` to that URL and configure the Worker’s `GAME_ORIGIN` to allow your local origin.
+4. Create or join an online room. A direct connection makes zero Worker requests. When a remote peer answers but the direct data channel fails, the browsers exchange a guest commitment and match ID through signaling. Each browser keeps its own session, completes Turnstile, and redeems a separate ticket for one-hour TURN credentials. The Worker checks the verified hostname, action and match-seat binding. Each proof can be spent only once. Older clients can still play directly and need an update to use this relay.
 
 ### Relay admission protocol
 
@@ -41,10 +42,10 @@ The shared Worker accepts JSON POSTs from the configured game origins. It return
 
 | Route | Request | Success |
 | --- | --- | --- |
-| `/v1/matches` | `game, hostPeer, guestPeer, guestCommitment` | `match, session` for the host |
-| `/v1/join` | `match, secret` | `session` for the guest, stable on retry |
+| `/v1/matches` | `game, hostPeer, guestPeer, guestCommitment` | `match, session, sitekey` for the host |
+| `/v1/join` | `match, secret` | `session, sitekey` for the guest, stable on retry |
 | `/v1/ticket` | `match, session` | `ticket` once both seats are claimed, or HTTP 409 while waiting |
-| `/v1/credentials` | `match, session, ticket` | `iceServers` |
+| `/v1/credentials` | `match, session, ticket, turnstileToken` | `iceServers` |
 
 The commitment is the lowercase hex SHA-256 digest of the guest's random UUID. Matches last five minutes. Each seat can obtain up to four tickets per match. A ticket expires after one minute or when its match expires, whichever comes first. Redemption consumes the ticket and reserves one issuance in a single storage transaction before calling Cloudflare. An interrupted upstream request requires a fresh ticket. Alarms remove expired records even when the service goes idle.
 
