@@ -2,6 +2,8 @@
 
 Copy the entire `src/multiplayer/` directory into your web game and import from its `index.ts`. The module uses TypeScript, browser APIs, PeerJS for signaling, and WebRTC for reliable ordered game messages. It runs in an HTTPS browser page or on localhost.
 
+[Relay access, player verification, and usage limits](SECURITY.md)
+
 ```sh
 pnpm add peerjs@1.5.5 qrcode@1.5.4
 pnpm add -D @types/qrcode
